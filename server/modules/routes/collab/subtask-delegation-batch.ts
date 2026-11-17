@@ -4,6 +4,13 @@ import { randomUUID } from "node:crypto";
 
 import type { Lang } from "../../../types/lang.ts";
 import { resolveWorkflowPackKeyForTask } from "../../workflow/packs/task-pack-resolver.ts";
+import {
+  getVoiceoverSubtask,
+  prepareVideoVoiceoverRun,
+  VIDEO_AUDIO_QA_MARKER,
+  VOICEOVER_MARKER,
+  VIDEO_RENDER_MARKER,
+} from "../../workflow/packs/video-voiceover.ts";
 import { ensureVideoPreprodRemotionBestPracticesSkill } from "../../workflow/core/video-skill-bootstrap.ts";
 import { resolveConstrainedAgentScopeForTask } from "../core/tasks/execution-run-auto-assign.ts";
 import type { AgentRow } from "./direct-chat.ts";
@@ -206,21 +213,47 @@ export function createSubtaskDelegationBatch(deps: BatchDeps) {
     const targetDeptName = getDeptName(targetDeptId, parentTask.workflow_pack_key ?? null);
     const subtaskIds = subtasks.map((st) => st.id);
     const firstTitle = subtasks[0].title;
+    const voiceoverBatch =
+      targetDeptId === "voice_audio" && subtasks.some((subtask) => subtask.title.startsWith(VOICEOVER_MARKER));
+    const narrationQaBatch = subtasks.some((subtask) => subtask.title.startsWith(VIDEO_AUDIO_QA_MARKER));
+    const narratedRender =
+      subtasks.some((subtask) => subtask.title.includes(VIDEO_RENDER_MARKER)) &&
+      parentTask.workflow_pack_key === "video_preprod" &&
+      Boolean(getVoiceoverSubtask(db, parentTask.id));
     const batchTitle = subtasks.length > 1 ? `${firstTitle} +${subtasks.length - 1}` : firstTitle;
     const projectCandidateAgentIds = getConstrainedAgentIds(parentTask, targetDeptId);
     const manualScoped = Array.isArray(projectCandidateAgentIds);
 
-    const crossLeader = findTeamLeader(targetDeptId, projectCandidateAgentIds);
+    const projectLeader = voiceoverBatch ? null : findTeamLeader(targetDeptId, projectCandidateAgentIds);
+    const crossLeader =
+      projectLeader ??
+      (voiceoverBatch || narratedRender || narrationQaBatch
+        ? findTeamLeader(
+            targetDeptId,
+            resolveConstrainedAgentScopeForTask(db, {
+              workflow_pack_key: "video_preprod",
+              department_id: targetDeptId,
+              project_id: null,
+            }),
+          )
+        : null);
     if (!crossLeader) {
       const doneAt = nowMs();
       for (const sid of subtaskIds) {
-        db.prepare("UPDATE subtasks SET status = 'done', completed_at = ?, blocked_reason = NULL WHERE id = ?").run(
-          doneAt,
-          sid,
-        );
+        if (voiceoverBatch || narratedRender || narrationQaBatch) {
+          db.prepare("UPDATE subtasks SET status = 'blocked', blocked_reason = ? WHERE id = ?").run(
+            `${targetDeptName} has no available team leader`,
+            sid,
+          );
+        } else {
+          db.prepare("UPDATE subtasks SET status = 'done', completed_at = ?, blocked_reason = NULL WHERE id = ?").run(
+            doneAt,
+            sid,
+          );
+        }
         broadcast("subtask_update", db.prepare("SELECT * FROM subtasks WHERE id = ?").get(sid));
       }
-      maybeNotifyAllSubtasksComplete(parentTask.id);
+      if (!voiceoverBatch && !narratedRender && !narrationQaBatch) maybeNotifyAllSubtasksComplete(parentTask.id);
       onBatchDone?.();
       return;
     }
@@ -237,7 +270,9 @@ export function createSubtaskDelegationBatch(deps: BatchDeps) {
           pickManualPoolAgent(projectCandidateAgentIds, targetDeptId) ||
           pickManualPoolAgent(projectCandidateAgentIds, null)
         : null;
-    const crossCoordinator = crossLeaderAllowed ? crossLeader : (crossSub ?? manualPoolFallback ?? crossLeader);
+    const useDepartmentLeader = voiceoverBatch || (!projectLeader && (narratedRender || narrationQaBatch));
+    const crossCoordinator =
+      useDepartmentLeader || crossLeaderAllowed ? crossLeader : (crossSub ?? manualPoolFallback ?? crossLeader);
     const originLeaderName = originLeader
       ? getAgentDisplayName(originLeader, lang)
       : teamLeadFallbackLabel({ l, pickL }, lang);
@@ -309,11 +344,12 @@ export function createSubtaskDelegationBatch(deps: BatchDeps) {
             pickManualPoolAgent(projectCandidateAgentIds, targetDeptId) ||
             pickManualPoolAgent(projectCandidateAgentIds, null)
           : null;
-      const execAgent =
-        crossSubAtRun ??
-        (crossLeaderAllowed ? crossLeader : manualPoolFallbackAtRun) ??
-        crossCoordinator ??
-        crossLeader;
+      const execAgent = useDepartmentLeader
+        ? crossLeader
+        : (crossSubAtRun ??
+          (crossLeaderAllowed ? crossLeader : manualPoolFallbackAtRun) ??
+          crossCoordinator ??
+          crossLeader);
       const execName = getAgentDisplayName(execAgent, lang);
 
       sendAgentMessage(
@@ -468,14 +504,30 @@ export function createSubtaskDelegationBatch(deps: BatchDeps) {
             `Git worktree created: ${worktreePath} (branch: climpire/${delegatedTaskId.slice(0, 8)})`,
           );
           const logFilePath = path.join(logsDir, `${delegatedTaskId}.log`);
-          ensureVideoPreprodRemotionBestPracticesSkill({
-            db: db as any,
-            nowMs,
-            workflowPackKey: parentTask.workflow_pack_key ?? null,
-            provider: execProvider,
-            taskId: delegatedTaskId,
-            appendTaskLog,
-          });
+          const voiceover = prepareVideoVoiceoverRun(
+            db,
+            delegatedTaskId,
+            {
+              title: delegatedTitle,
+              description: delegatedDescription,
+              workflow_pack_key: delegatedWorkflowPackKey,
+              source_task_id: parentTask.id,
+            },
+            projPath,
+            agentCwd,
+            nowMs(),
+            broadcast,
+          );
+          if (!voiceover.replacesVideoRules) {
+            ensureVideoPreprodRemotionBestPracticesSkill({
+              db: db as any,
+              nowMs,
+              workflowPackKey: parentTask.workflow_pack_key ?? null,
+              provider: execProvider,
+              taskId: delegatedTaskId,
+              appendTaskLog,
+            });
+          }
           const spawnPrompt = buildSubtaskDelegationPrompt(
             parentTask,
             subtasks,
@@ -527,6 +579,7 @@ export function createSubtaskDelegationBatch(deps: BatchDeps) {
             `[Task Session] id=${executionSession.sessionId} owner=${executionSession.agentId} provider=${executionSession.provider}`,
             "Task-scoped session: keep continuity only within this delegated task.",
             spawnPrompt,
+            voiceover.prompt,
             worktreeNote,
             siblingWorktreeBlock,
           ].join("\n");

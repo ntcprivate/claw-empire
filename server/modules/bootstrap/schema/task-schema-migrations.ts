@@ -1,4 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
+import {
+  VIDEO_AUDIO_DEPARTMENT,
+  VIDEO_AUDIO_OFFICE_SEEDED_KEY,
+  VIDEO_AUDIO_PACK,
+} from "../../../../shared/video-audio-office.ts";
 import { DEFAULT_WORKFLOW_PACK_KEY, WORKFLOW_PACK_KEYS, isWorkflowPackKey } from "../../workflow/packs/definitions.ts";
 
 type DbLike = Pick<DatabaseSync, "exec" | "prepare">;
@@ -224,6 +229,9 @@ function ensureOfficePackScopedDepartmentSchema(db: DbLike): void {
   }
   const root = asObject(parsedRoot);
   if (!root) return;
+  const seededVideoAudio = db
+    .prepare("SELECT 1 FROM settings WHERE key = ? AND value = 'true'")
+    .get(VIDEO_AUDIO_OFFICE_SEEDED_KEY);
 
   const upsertPackDepartment = db.prepare(
     `
@@ -258,6 +266,8 @@ function ensureOfficePackScopedDepartmentSchema(db: DbLike): void {
         if (!department) continue;
         const departmentId = normalizeText(department.id);
         if (!departmentId) continue;
+        // After seeding, edits to the scoped department live in the database.
+        if (seededVideoAudio && packKey === VIDEO_AUDIO_PACK && departmentId === VIDEO_AUDIO_DEPARTMENT.id) continue;
 
         const name = normalizeText(department.name) || departmentId;
         const nameKo = normalizeText(department.name_ko) || name;

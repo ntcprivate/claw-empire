@@ -2,7 +2,7 @@ import type { RuntimeContext } from "../../../types/runtime-context.ts";
 import type { Lang } from "../../../types/lang.ts";
 import type { AgentRow } from "./direct-chat.ts";
 
-type L10n = Record<Lang, string[]>;
+type L10n = Record<Exclude<Lang, "vi">, string[]> & Partial<Record<"vi", string[]>>;
 
 type AnnouncementReplyDeps = {
   db: RuntimeContext["db"];

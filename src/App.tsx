@@ -47,6 +47,7 @@ import {
   buildOfficePackStarterAgents,
   getOfficePackMeta,
   normalizeOfficeWorkflowPack,
+  resolveOfficePackSeedAgentId,
   resolveOfficePackSeedProvider,
 } from "./app/office-workflow-pack";
 
@@ -169,7 +170,7 @@ export default function App() {
 
     const now = Date.now();
     const seededAgents: Agent[] = starterDrafts.map((draft, index) => ({
-      id: `${packKey}-seed-${index + 1}`,
+      id: resolveOfficePackSeedAgentId(packKey, draft.department_id, index),
       name: draft.name,
       name_ko: draft.name_ko,
       name_ja: draft.name_ja,

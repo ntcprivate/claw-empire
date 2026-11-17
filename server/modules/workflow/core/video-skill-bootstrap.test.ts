@@ -39,10 +39,18 @@ describe("ensureVideoPreprodRemotionBestPracticesSkill", () => {
       state: "installed",
       command: expect.stringContaining("--agent kimi-code"),
     });
-    expect(childProcessMocks.execFileSync).toHaveBeenCalledWith(
-      expect.stringMatching(/npx(?:\.cmd)?$/),
-      expect.arrayContaining(["--agent", "kimi-code"]),
-      expect.any(Object),
-    );
+    if (process.platform === "win32") {
+      expect(childProcessMocks.execFileSync).toHaveBeenCalledWith(
+        process.env.ComSpec ?? "cmd.exe",
+        ["/d", "/s", "/c", expect.stringMatching(/^npx\.cmd .*--agent kimi-code\b/)],
+        expect.any(Object),
+      );
+    } else {
+      expect(childProcessMocks.execFileSync).toHaveBeenCalledWith(
+        "npx",
+        expect.arrayContaining(["--agent", "kimi-code"]),
+        expect.any(Object),
+      );
+    }
   });
 });

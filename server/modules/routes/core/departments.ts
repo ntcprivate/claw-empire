@@ -1,4 +1,5 @@
 import type { RuntimeContext } from "../../../types/runtime-context.ts";
+import { VIDEO_AUDIO_DEPARTMENT } from "../../../../shared/video-audio-office.ts";
 import { DEFAULT_WORKFLOW_PACK_KEY, type WorkflowPackKey } from "../../workflow/packs/definitions.ts";
 import {
   getDepartmentForPack,
@@ -67,10 +68,11 @@ export function registerDepartmentRoutes(deps: DepartmentRouteDeps): void {
        WHERE a.department_id = d.id
          AND ${agentPackExpr} = 'development'${seedFilterClause}) AS agent_count
     FROM departments d
+    WHERE d.id <> ?
     ORDER BY d.sort_order ASC
   `,
       )
-      .all();
+      .all(VIDEO_AUDIO_DEPARTMENT.id);
   }
 
   function listScopedDepartments(packKey: WorkflowPackKey, includeSeed: boolean): unknown[] {

@@ -1,4 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
+import {
+  VIDEO_AUDIO_AGENT,
+  VIDEO_AUDIO_AGENT_ID,
+  VIDEO_AUDIO_DEPARTMENT,
+  VIDEO_AUDIO_PACK,
+} from "../../../../shared/video-audio-office.ts";
 import type { AgentRow } from "./direct-chat-types.ts";
 import {
   DEFAULT_WORKFLOW_PACK_KEY,
@@ -179,6 +185,14 @@ function ensureDepartmentExists(
   nowMs: number,
 ): string | null {
   if (!departmentId) return null;
+  if (packKey === VIDEO_AUDIO_PACK && departmentId === VIDEO_AUDIO_DEPARTMENT.id) {
+    // Agents and child tasks still reference the base department table through SQLite foreign keys.
+    const { id, name, name_ko, icon, color } = VIDEO_AUDIO_DEPARTMENT;
+    db.prepare(
+      `INSERT OR IGNORE INTO departments (id, name, name_ko, icon, color, sort_order)
+       VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM departments))`,
+    ).run(id, name, name_ko, icon, color);
+  }
   if (packKey === DEFAULT_WORKFLOW_PACK_KEY) {
     const existing = db.prepare("SELECT id FROM departments WHERE id = ? LIMIT 1").get(departmentId) as
       | { id?: unknown }
@@ -310,6 +324,55 @@ function ensureDepartmentExists(
   return normalizeText(inserted?.id) ? departmentId : null;
 }
 
+export function ensureVideoAudioOfficePack(db: DbLike, nowMs: () => number): boolean {
+  if (!hasAgentWorkflowPackColumn(db)) return false;
+  const order = db
+    .prepare(
+      "SELECT COALESCE(MAX(sort_order), 0) + 1 AS value FROM office_pack_departments WHERE workflow_pack_key = ?",
+    )
+    .get(VIDEO_AUDIO_PACK) as { value: number };
+  const now = nowMs();
+  const department = { ...VIDEO_AUDIO_DEPARTMENT, sort_order: order.value, created_at: now };
+  if (!ensureDepartmentExists(db, VIDEO_AUDIO_PACK, department.id, department, now)) return false;
+
+  const existingProducer = findExistingVideoAudioProducer(db);
+  if (existingProducer) return true;
+
+  const inserted = upsertOfficePackProfileAgent(
+    db,
+    VIDEO_AUDIO_PACK,
+    {
+      ...VIDEO_AUDIO_AGENT,
+      id: VIDEO_AUDIO_AGENT_ID,
+      cli_model: null,
+      cli_reasoning_level: null,
+      sprite_number: null,
+      created_at: now,
+    },
+    department,
+    now,
+  );
+  return inserted > 0;
+}
+
+function findExistingVideoAudioProducer(db: DbLike): { id: string } | undefined {
+  return db
+    .prepare(
+      `SELECT id FROM agents
+       WHERE workflow_pack_key = ? AND department_id = ? AND role = 'team_leader'
+         AND (id = ? OR name = ? COLLATE NOCASE)
+       ORDER BY (id = ?) DESC, created_at, id
+       LIMIT 1`,
+    )
+    .get(
+      VIDEO_AUDIO_PACK,
+      VIDEO_AUDIO_DEPARTMENT.id,
+      VIDEO_AUDIO_AGENT_ID,
+      VIDEO_AUDIO_AGENT.name,
+      VIDEO_AUDIO_AGENT_ID,
+    ) as { id: string } | undefined;
+}
+
 export function hydrateOfficePackAgentFromSettings(db: DbLike, agentId: string, nowMs: () => number): AgentRow | null {
   const normalizedAgentId = normalizeText(agentId);
   if (!normalizedAgentId) return null;
@@ -409,6 +472,10 @@ function upsertOfficePackProfileAgent(
   const deptId = ensureDepartmentExists(db, packKey, agent.department_id, department, now);
   const includeWorkflowPackKey = hasAgentWorkflowPackColumn(db);
   try {
+    if (includeWorkflowPackKey && packKey === VIDEO_AUDIO_PACK && agent.id === VIDEO_AUDIO_AGENT_ID) {
+      const existingProducer = findExistingVideoAudioProducer(db);
+      if (existingProducer && existingProducer.id !== agent.id) return 0;
+    }
     const result = includeWorkflowPackKey
       ? (db
           .prepare(

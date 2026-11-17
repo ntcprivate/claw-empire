@@ -6,6 +6,13 @@ import {
   resolveVideoArtifactSpecForTask,
 } from "../packs/video-artifact.ts";
 import { evaluateRemotionOnlyGateFromLogFiles } from "../packs/video-render-engine-gate.ts";
+import { VieNeuTtsError } from "../packs/vieneu-tts.ts";
+import {
+  getVoiceoverSubtask,
+  isDelegatedVoiceoverTask,
+  publishNarrationScript,
+  synthesizeNarration,
+} from "../packs/video-voiceover.ts";
 
 type CreateRunCompleteHandlerDeps = Record<string, any>;
 
@@ -13,6 +20,7 @@ export function createRunCompleteHandler(deps: CreateRunCompleteHandlerDeps) {
   const {
     activeProcesses,
     stopProgressTimer,
+    getNextHttpAgentPid,
     db,
     stopRequestedTasks,
     stopRequestModeByTask,
@@ -53,7 +61,75 @@ export function createRunCompleteHandler(deps: CreateRunCompleteHandlerDeps) {
     hasVisibleDiffSummary,
   } = deps;
 
+  const voiceoverInFlight = new Set<string>();
+
   function handleTaskRunComplete(taskId: string, exitCode: number): void {
+    if (voiceoverInFlight.has(taskId)) return;
+    if (exitCode === 0 && !stopRequestedTasks.has(taskId)) {
+      const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as
+        | {
+            status: string;
+            title: string;
+            description: string | null;
+            workflow_pack_key: string | null;
+            source_task_id: string | null;
+          }
+        | undefined;
+      if (task?.status === "in_progress" && task.source_task_id && isDelegatedVoiceoverTask(db, taskId, task)) {
+        const parentId = task.source_task_id;
+        const worktree = taskWorktrees.get(taskId);
+        const controller = new AbortController();
+        activeProcesses.set(taskId, {
+          pid: getNextHttpAgentPid(),
+          kill: () => {
+            controller.abort();
+            return true;
+          },
+        });
+        voiceoverInFlight.add(taskId);
+        void (async () => {
+          let resultCode = 0;
+          try {
+            if (!worktree?.projectPath || !worktree.worktreePath) throw new Error("Missing voiceover worktree");
+            const result = await synthesizeNarration(
+              worktree.worktreePath,
+              worktree.projectPath,
+              parentId,
+              undefined,
+              controller.signal,
+              (status) => appendTaskLog(taskId, "system", `[generate_speech] ${status}`),
+            );
+            const duration = result.durationSeconds === null ? "" : `, ~${result.durationSeconds}s`;
+            const handoff = `[generate_speech] success audio_path=${result.outputPath} (${result.bytes} bytes${duration})`;
+            appendTaskLog(taskId, "system", handoff);
+            appendTaskLog(parentId, "system", handoff);
+          } catch (error) {
+            resultCode = 89;
+            appendTaskLog(
+              taskId,
+              "error",
+              error instanceof VieNeuTtsError
+                ? `[generate_speech] VieNeu-TTS failed code=${error.code}: ${error.message}`
+                : "Voiceover handoff failed. Check the approved narration, optional delivery settings and project output directory.",
+            );
+          } finally {
+            voiceoverInFlight.delete(taskId);
+          }
+          completeTaskRun(taskId, resultCode);
+          const completed = db.prepare("SELECT status FROM tasks WHERE id = ?").get(taskId) as
+            | { status: string }
+            | undefined;
+          if (resultCode === 0 && completed?.status === "review") {
+            processSubtaskDelegations(parentId, { includeRender: true });
+          }
+        })();
+        return;
+      }
+    }
+    completeTaskRun(taskId, exitCode);
+  }
+
+  function completeTaskRun(taskId: string, exitCode: number): void {
     activeProcesses.delete(taskId);
     stopProgressTimer(taskId);
 
@@ -113,6 +189,21 @@ export function createRunCompleteHandler(deps: CreateRunCompleteHandlerDeps) {
     }
     const isVideoPreprodTask = task.workflow_pack_key === "video_preprod";
     const isVideoFinalRenderTask = isVideoPreprodTask && /\[VIDEO_FINAL_RENDER\]/i.test(task.title);
+    const isNarratedRoot = isVideoPreprodTask && !task.source_task_id && Boolean(getVoiceoverSubtask(db, taskId));
+    if (finalExitCode === 0 && isNarratedRoot) {
+      try {
+        const worktree = taskWorktrees.get(taskId);
+        if (!worktree?.projectPath || !worktree.worktreePath) throw new Error("Missing pre-production worktree");
+        publishNarrationScript(worktree.projectPath, worktree.worktreePath, taskId);
+      } catch {
+        finalExitCode = 89;
+        appendTaskLog(
+          taskId,
+          "error",
+          "Pre-production did not produce a valid Vietnamese narration script. Voice & Audio is waiting for the script.",
+        );
+      }
+    }
     const probeVideoArtifact = () => {
       const videoArtifactSpec = resolveVideoArtifactSpecForTask(db as any, {
         project_id: task.project_id,
@@ -491,11 +582,17 @@ export function createRunCompleteHandler(deps: CreateRunCompleteHandlerDeps) {
       const updatedTask = db.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId);
       broadcast("task_update", updatedTask);
       if (task) notifyTaskStatus(taskId, task.title, "review", resolveLang(task.description ?? task.title));
+      if (isNarratedRoot) {
+        processSubtaskDelegations(taskId);
+      }
 
       // Collaboration child tasks should wait in review until parent consolidation meeting.
       // Queue continuation is still triggered so sequential delegation does not stall.
       if (task?.source_task_id) {
         reconcileDelegatedSubtasksAfterRun(taskId, 0);
+        if (isVideoFinalRenderTask && getVoiceoverSubtask(db, task.source_task_id)) {
+          processSubtaskDelegations(task.source_task_id);
+        }
         const sourceLang = resolveLang(task.description ?? task.title);
         appendTaskLog(
           taskId,

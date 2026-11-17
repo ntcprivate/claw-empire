@@ -31,6 +31,9 @@ function loadEnvFile(filePath: string, override = false): void {
 const rootEnvFilePath = path.resolve(SERVER_DIRNAME, "..", "..", ".env");
 loadEnvFile(rootEnvFilePath);
 
+// Existing installations may still carry this retired credential. Keep it out of subprocess environments.
+delete process.env.ELEVENLABS_API_KEY;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------

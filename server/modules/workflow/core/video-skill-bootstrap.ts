@@ -197,7 +197,10 @@ export function ensureVideoPreprodRemotionBestPracticesSkill(args: EnsureRemotio
     const startedAt = nowMs();
     const commandText = `${SKILLS_NPX_CMD} ${cmdArgs.join(" ")}`;
     try {
-      execFileSync(SKILLS_NPX_CMD, cmdArgs, {
+      // Windows needs cmd.exe to execute the npm .cmd shim. The command contains only fixed flags and identifiers.
+      const executable = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : SKILLS_NPX_CMD;
+      const args = process.platform === "win32" ? ["/d", "/s", "/c", commandText] : cmdArgs;
+      execFileSync(executable, args, {
         cwd: process.cwd(),
         env: { ...process.env, FORCE_COLOR: "0" },
         stdio: ["ignore", "pipe", "pipe"],

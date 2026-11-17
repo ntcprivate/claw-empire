@@ -1,5 +1,8 @@
 import type { Lang } from "../../../types/lang.ts";
 import { resolveConstrainedAgentScopeForTask } from "../../routes/core/tasks/execution-run-auto-assign.ts";
+import { VIDEO_AUDIO_QA_MARKER, VIDEO_RENDER_MARKER, VOICEOVER_MARKER } from "../packs/video-voiceover.ts";
+
+const VIDEO_STAGE_MARKERS = [VOICEOVER_MARKER, VIDEO_RENDER_MARKER, VIDEO_AUDIO_QA_MARKER];
 
 type PlannerSubtaskAssignment = {
   subtask_id: string;
@@ -238,7 +241,7 @@ export function createSubtaskRoutingTools(deps: SubtaskRoutingDeps) {
 
       const baseDeptId = ownerDeptId ?? task.department_id;
       const lang = resolveLang(task.description ?? task.title);
-      const subtasks = db
+      const pendingSubtasks = db
         .prepare(
           `
       SELECT id, title, description, status, blocked_reason, target_department_id, assigned_agent_id, delegated_task_id
@@ -259,6 +262,10 @@ export function createSubtaskRoutingTools(deps: SubtaskRoutingDeps) {
         assigned_agent_id: string | null;
         delegated_task_id: string | null;
       }>;
+      const subtasks =
+        task.workflow_pack_key === "video_preprod"
+          ? pendingSubtasks.filter((subtask) => !VIDEO_STAGE_MARKERS.some((marker) => subtask.title.includes(marker)))
+          : pendingSubtasks;
       if (subtasks.length === 0) return;
 
       const deptRows = db.prepare("SELECT id, name, name_ko FROM departments ORDER BY sort_order ASC").all() as Array<{

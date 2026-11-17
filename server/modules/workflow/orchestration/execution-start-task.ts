@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { RuntimeContext } from "../../../types/runtime-context.ts";
 import { getDepartmentPromptForPack } from "../packs/department-scope.ts";
+import { prepareVideoVoiceoverRun } from "../packs/video-voiceover.ts";
 import { ensureVideoPreprodRemotionBestPracticesSkill } from "../core/video-skill-bootstrap.ts";
 import { buildWorkflowPackExecutionGuidance } from "../packs/execution-guidance.ts";
 import { resolveVideoArtifactSpecForTask } from "../packs/video-artifact.ts";
@@ -100,6 +101,7 @@ export function createExecutionStartTaskTools(deps: CreateExecutionStartTaskTool
           department_id: string | null;
           base_branch: string | null;
           workflow_pack_key: string | null;
+          source_task_id?: string | null;
         }
       | undefined;
     if (!taskData) return;
@@ -168,6 +170,14 @@ export function createExecutionStartTaskTools(deps: CreateExecutionStartTaskTool
       return;
     }
     const agentCwd = worktreePath;
+    let voiceover;
+    try {
+      voiceover = prepareVideoVoiceoverRun(db, taskId, taskData, projPath, agentCwd, nowMs(), broadcast);
+    } catch {
+      appendTaskLog(taskId, "error", "Voiceover handoff unavailable. Check the narration script or the completed MP3.");
+      handleTaskRunComplete(taskId, 1);
+      return;
+    }
     appendTaskLog(taskId, "system", `Git worktree created: ${worktreePath} (branch: climpire/${taskId.slice(0, 8)})`);
     const logFilePath = path.join(logsDir, `${taskId}.log`);
     const roleLabels: Record<string, string> = {
@@ -228,7 +238,10 @@ export function createExecutionStartTaskTools(deps: CreateExecutionStartTaskTool
         recentChanges ? `[Recent Changes]\n${recentChanges}` : "",
         `[Task] ${taskData.title}`,
         taskData.description ? `\n${taskData.description}` : "",
-        workflowPackGuidance ? `\n[Workflow Pack Execution Rules]\n${workflowPackGuidance}` : "",
+        workflowPackGuidance && !voiceover.replacesVideoRules
+          ? `\n[Workflow Pack Execution Rules]\n${workflowPackGuidance}`
+          : "",
+        voiceover.prompt,
         continuationCtx,
         conversationCtx,
         `\n---`,

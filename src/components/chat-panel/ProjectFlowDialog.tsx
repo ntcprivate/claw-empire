@@ -1,3 +1,4 @@
+import { useId, useState } from "react";
 import type { Project } from "../../types";
 
 type ProjectFlowStep = "choose" | "existing" | "new" | "confirm";
@@ -5,7 +6,6 @@ type ProjectFlowStep = "choose" | "existing" | "new" | "confirm";
 type Tr = (ko: string, en: string, ja?: string, zh?: string) => string;
 
 interface ProjectFlowDialogProps {
-  open: boolean;
   step: ProjectFlowStep;
   isDirectivePending: boolean;
   pendingContent: string;
@@ -35,7 +35,6 @@ interface ProjectFlowDialogProps {
 }
 
 export default function ProjectFlowDialog({
-  open,
   step,
   isDirectivePending,
   pendingContent,
@@ -63,25 +62,51 @@ export default function ProjectFlowDialog({
   onCreateProject,
   onConfirm,
 }: ProjectFlowDialogProps) {
-  if (!open) return null;
+  const [expanded, setExpanded] = useState(true);
+  const titleId = useId();
+  const contentId = useId();
 
   return (
-    <div className="absolute inset-0 z-[70] flex items-center justify-center bg-black/75 p-4">
-      <div className="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-slate-700 px-4 py-3">
-          <h3 className="text-sm font-semibold text-white">
+    <div className="absolute inset-0 z-[70] flex items-center justify-center bg-black/75 p-2 sm:p-4">
+      <div
+        role="dialog"
+        aria-labelledby={titleId}
+        className="flex max-h-full min-h-0 w-full max-w-md flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-2xl"
+      >
+        <div className="flex shrink-0 items-center justify-between gap-2 px-4 py-3">
+          <h3 id={titleId} className="text-sm font-semibold text-white">
             {tr("프로젝트 분기", "Project Branch", "プロジェクト分岐", "项目分支")}
           </h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md px-2 py-1 text-xs text-slate-400 hover:bg-slate-800 hover:text-white"
-          >
-            ✕
-          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              aria-controls={contentId}
+              aria-expanded={expanded}
+              onClick={() => setExpanded((current) => !current)}
+              className="rounded-md px-2 py-1 text-xs text-slate-300 hover:bg-slate-800 hover:text-white"
+            >
+              {expanded ? tr("접기", "Collapse", "折りたたむ", "收起") : tr("펼치기", "Expand", "展開", "展开")}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={tr("닫기", "Close", "閉じる", "关闭")}
+              className="rounded-md px-2 py-1 text-xs text-slate-400 hover:bg-slate-800 hover:text-white"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
-        <div className="space-y-3 px-4 py-4 text-sm">
+        <div
+          key={step}
+          id={contentId}
+          hidden={!expanded}
+          tabIndex={0}
+          role="region"
+          aria-label={tr("프로젝트 상세", "Project details", "プロジェクト詳細", "项目详情")}
+          className="min-h-0 space-y-3 overflow-y-auto overscroll-contain border-t border-slate-700 px-4 py-4 text-sm"
+        >
           {step === "choose" && (
             <>
               <p className="text-slate-200">
@@ -130,7 +155,7 @@ export default function ProjectFlowDialog({
                   {tr("프로젝트가 없습니다", "No projects", "プロジェクトなし", "暂无项目")}
                 </p>
               ) : (
-                <div className="max-h-52 space-y-2 overflow-y-auto pr-1">
+                <div className="space-y-2">
                   {projectItems.map((project, idx) => (
                     <div key={project.id} className="rounded-lg border border-slate-700 bg-slate-800/60 p-2">
                       <p className="text-xs font-medium text-slate-100">
@@ -248,9 +273,11 @@ export default function ProjectFlowDialog({
           {step === "confirm" && selectedProject && (
             <>
               <div className="rounded-lg border border-slate-700 bg-slate-800/60 p-3">
-                <p className="text-xs font-semibold text-white">{selectedProject.name}</p>
-                <p className="mt-1 text-[11px] text-slate-400">{selectedProject.project_path}</p>
-                <p className="mt-1 text-[11px] text-slate-300">{selectedProject.core_goal}</p>
+                <p className="text-xs font-semibold wrap-anywhere text-white">{selectedProject.name}</p>
+                <p className="mt-1 text-[11px] wrap-anywhere text-slate-400">{selectedProject.project_path}</p>
+                <p className="mt-1 text-[11px] whitespace-pre-wrap wrap-anywhere text-slate-300">
+                  {selectedProject.core_goal}
+                </p>
                 {selectedProject.assignment_mode === "manual" && (
                   <div className="mt-2 flex items-center gap-1.5 text-[11px] text-violet-300">
                     <span className="inline-block h-2 w-2 rounded-full bg-violet-400"></span>
@@ -265,7 +292,7 @@ export default function ProjectFlowDialog({
               </div>
               <div className="rounded-lg border border-blue-700/40 bg-blue-900/20 p-3 text-[11px] text-blue-100">
                 <p className="font-medium">{tr("라운드 목표", "Round Goal", "ラウンド目標", "回合目标")}</p>
-                <p className="mt-1 leading-relaxed">
+                <p className="mt-1 leading-relaxed whitespace-pre-wrap wrap-anywhere">
                   {tr(
                     `프로젝트 핵심목표(${selectedProject.core_goal})를 기준으로 이번 요청(${pendingContent})을 실행 가능한 산출물로 완수`,
                     `Execute this round with project core goal (${selectedProject.core_goal}) and current request (${pendingContent}).`,
@@ -274,25 +301,30 @@ export default function ProjectFlowDialog({
                   )}
                 </p>
               </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={onConfirm}
-                  className="flex-1 rounded bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-500"
-                >
-                  {tr("선택 후 전송", "Select & Send", "選択して送信", "选择并发送")}
-                </button>
-                <button
-                  type="button"
-                  onClick={onBackToChoose}
-                  className="rounded border border-slate-700 px-3 py-2 text-xs text-slate-300"
-                >
-                  {tr("다시 선택", "Re-select", "再選択", "重新选择")}
-                </button>
-              </div>
             </>
           )}
         </div>
+        {step === "confirm" && selectedProject && (
+          <div className="flex shrink-0 gap-2 border-t border-slate-700 px-4 py-3">
+            <button
+              type="button"
+              onClick={onConfirm}
+              className="flex-1 rounded bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-500"
+            >
+              {tr("선택 후 전송", "Select & Send", "選択して送信", "选择并发送")}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setExpanded(true);
+                onBackToChoose();
+              }}
+              className="rounded border border-slate-700 px-3 py-2 text-xs text-slate-300"
+            >
+              {tr("다시 선택", "Re-select", "再選択", "重新选择")}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,4 +1,10 @@
 import fs from "node:fs";
+import {
+  getVoiceoverSubtask,
+  hasFinishedNarratedStage,
+  hasNarrationAudio,
+  VIDEO_AUDIO_QA_MARKER,
+} from "../packs/video-voiceover.ts";
 import path from "node:path";
 import {
   discoverVideoArtifact,
@@ -346,6 +352,16 @@ export function createReviewFinalizeTools(deps: CreateReviewFinalizeToolsDeps) {
         | { worktreePath?: string; projectPath?: string; branchName?: string }
         | undefined;
       const outputRoot = currentTask.project_path || wtInfo?.projectPath || process.cwd();
+      const voiceover = getVoiceoverSubtask(db, taskId);
+      if (
+        voiceover &&
+        (voiceover.status !== "done" ||
+          !hasNarrationAudio(outputRoot, taskId) ||
+          !hasFinishedNarratedStage(db, taskId, VIDEO_AUDIO_QA_MARKER))
+      ) {
+        appendTaskLog(taskId, "system", "Review hold: Vietnamese narration or the Cut QA checkpoint is incomplete.");
+        return;
+      }
       const videoArtifactSpec = resolveVideoArtifactSpecForTask(db as any, {
         project_id: currentTask.project_id,
         project_path: currentTask.project_path,

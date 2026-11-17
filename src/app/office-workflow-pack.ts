@@ -1,4 +1,10 @@
 import type { Agent, AgentRole, CliProvider, Department, RoomTheme, WorkflowPackKey } from "../types";
+import {
+  VIDEO_AUDIO_AGENT,
+  VIDEO_AUDIO_AGENT_ID,
+  VIDEO_AUDIO_DEPARTMENT,
+  VIDEO_AUDIO_PACK,
+} from "../../shared/video-audio-office";
 
 export type UiLanguageLike = "ko" | "en" | "ja" | "zh";
 
@@ -361,6 +367,7 @@ const PACK_PRESETS: Record<WorkflowPackKey, PackPreset> = {
       ceoOffice: { floor1: 0x1f1f25, floor2: 0x17171c, wall: 0x343748, accent: 0xd18d35 },
       planning: { floor1: 0x25212b, floor2: 0x1c1923, wall: 0x44405b, accent: 0xbc7d47 },
       dev: { floor1: 0x1d2631, floor2: 0x17202a, wall: 0x334961, accent: 0x4c8fca },
+      voice_audio: { floor1: 0x1c2c2b, floor2: 0x152120, wall: 0x34534e, accent: 0x449e92 },
       design: { floor1: 0x2a2230, floor2: 0x211a27, wall: 0x544063, accent: 0xc274b7 },
       qa: { floor1: 0x2a2425, floor2: 0x211d1f, wall: 0x5a494b, accent: 0xb98862 },
       devsecops: { floor1: 0x1f242c, floor2: 0x182028, wall: 0x3b4d62, accent: 0x6f8fb0 },
@@ -655,16 +662,18 @@ export function buildOfficePackPresentation(params: {
   customRoomThemes: Record<string, RoomTheme>;
 }): OfficePackPresentation {
   const { packKey, locale, departments, agents, customRoomThemes } = params;
+  const packDepartments =
+    packKey === VIDEO_AUDIO_PACK ? departments : departments.filter((dept) => dept.id !== VIDEO_AUDIO_DEPARTMENT.id);
   if (packKey === "development") {
     return {
-      departments,
+      departments: packDepartments,
       agents,
       roomThemes: customRoomThemes,
     };
   }
 
   const preset = PACK_PRESETS[packKey] ?? PACK_PRESETS.development;
-  const transformedDepartments = departments.map((dept) => {
+  const transformedDepartments = packDepartments.map((dept) => {
     const deptPreset = preset.departments[dept.id];
     if (!deptPreset) return dept;
     const localizedName: Localized = {
@@ -693,6 +702,14 @@ export function buildOfficePackPresentation(params: {
     };
   });
 
+  if (packKey === VIDEO_AUDIO_PACK && !transformedDepartments.some((dept) => dept.id === VIDEO_AUDIO_DEPARTMENT.id)) {
+    transformedDepartments.push({
+      ...VIDEO_AUDIO_DEPARTMENT,
+      sort_order: transformedDepartments.reduce((order, dept) => Math.max(order, dept.sort_order), 0) + 1,
+      created_at: Date.now(),
+    });
+  }
+
   return {
     departments: transformedDepartments,
     agents,
@@ -714,6 +731,7 @@ export function resolveOfficePackSeedProvider(params: {
   const dept = String(params.departmentId ?? "")
     .trim()
     .toLowerCase();
+  if (params.packKey === VIDEO_AUDIO_PACK && dept === VIDEO_AUDIO_DEPARTMENT.id) return VIDEO_AUDIO_AGENT.cli_provider;
   if (dept === "planning") {
     const order = params.seedOrderInDepartment ?? params.seedIndex;
     return order % 2 === 0 ? "codex" : "claude";
@@ -721,6 +739,15 @@ export function resolveOfficePackSeedProvider(params: {
   if (dept === "dev" || dept === "design") return "claude";
   if (dept === "devsecops" || dept === "operations" || dept === "qa") return "codex";
   return params.seedIndex % 2 === 0 ? "codex" : "claude";
+}
+
+export function resolveOfficePackSeedAgentId(
+  packKey: WorkflowPackKey,
+  departmentId: string | null,
+  index: number,
+): string {
+  if (packKey === VIDEO_AUDIO_PACK && departmentId === VIDEO_AUDIO_DEPARTMENT.id) return VIDEO_AUDIO_AGENT_ID;
+  return `${packKey}-seed-${index + 1}`;
 }
 
 export function buildOfficePackStarterAgents(params: {
@@ -830,6 +857,18 @@ export function buildOfficePackStarterAgents(params: {
     if (!deptId) break;
     pushAgent(deptId, role);
     cursor += 1;
+  }
+
+  if (packKey === VIDEO_AUDIO_PACK && departmentById.has(VIDEO_AUDIO_DEPARTMENT.id)) {
+    const { cli_provider: _provider, ...audioProducer } = VIDEO_AUDIO_AGENT;
+    result.push({
+      ...audioProducer,
+      seed_order_in_department: 1,
+      sprite_number: resolveSeedSpriteNumber(
+        { packKey, deptId: VIDEO_AUDIO_DEPARTMENT.id, role: "team_leader", order: 1 },
+        usedSpriteNumbers,
+      ),
+    });
   }
 
   return result;

@@ -1,9 +1,14 @@
 import type { RuntimeContext } from "../../../types/runtime-context.ts";
 import {
+  VIDEO_AUDIO_DEPARTMENT,
+  VIDEO_AUDIO_OFFICE_SEEDED_KEY,
+  VIDEO_AUDIO_PACK,
+} from "../../../../shared/video-audio-office.ts";
+import {
   decryptMessengerChannelsForClient,
   encryptMessengerChannelsForStorage,
 } from "../../../messenger/token-crypto.ts";
-import { syncOfficePackAgentsForPack } from "../collab/office-pack-agent-hydration.ts";
+import { ensureVideoAudioOfficePack, syncOfficePackAgentsForPack } from "../collab/office-pack-agent-hydration.ts";
 
 const MESSENGER_SETTINGS_KEY = "messengerChannels";
 const OFFICE_PACK_PROFILES_KEY = "officePackProfiles";
@@ -78,12 +83,22 @@ export function registerOpsSettingsStatsRoutes(ctx: RuntimeContext): void {
     ).run(OFFICE_PACK_HYDRATED_PACKS_KEY, serialized);
   };
 
+  const maybeSeedVideoAudioOffice = (): void => {
+    if (readBooleanLikeSetting(VIDEO_AUDIO_OFFICE_SEEDED_KEY) || !ensureVideoAudioOfficePack(db, nowMs)) return;
+    db.prepare(
+      "INSERT INTO settings (key, value) VALUES (?, 'true') ON CONFLICT(key) DO UPDATE SET value = 'true'",
+    ).run(VIDEO_AUDIO_OFFICE_SEEDED_KEY);
+  };
+
   const maybeHydratePackOnFirstSelection = (selectedPackRaw: unknown, profilesOverride?: unknown): void => {
     const selectedPack = normalizePackKey(selectedPackRaw);
     if (!selectedPack || selectedPack === "development") return;
 
     const hydratedPacks = readHydratedPackSet();
-    if (hydratedPacks.has(selectedPack)) return;
+    if (hydratedPacks.has(selectedPack)) {
+      if (selectedPack === VIDEO_AUDIO_PACK) maybeSeedVideoAudioOffice();
+      return;
+    }
 
     const profilesValue =
       profilesOverride ??
@@ -96,6 +111,7 @@ export function registerOpsSettingsStatsRoutes(ctx: RuntimeContext): void {
 
     const result = syncOfficePackAgentsForPack(db, profilesValue, selectedPack, nowMs);
     if (result.departmentsSynced > 0 || result.agentsSynced > 0) {
+      if (selectedPack === VIDEO_AUDIO_PACK) maybeSeedVideoAudioOffice();
       hydratedPacks.add(selectedPack);
       saveHydratedPackSet(hydratedPacks);
     }
@@ -103,6 +119,7 @@ export function registerOpsSettingsStatsRoutes(ctx: RuntimeContext): void {
 
   try {
     maybeRunOfficePackSeedInit();
+    if (readHydratedPackSet().has(VIDEO_AUDIO_PACK)) maybeSeedVideoAudioOffice();
   } catch {
     // best-effort sync only
   }
@@ -261,11 +278,12 @@ export function registerOpsSettingsStatsRoutes(ctx: RuntimeContext): void {
       LEFT JOIN tasks t
         ON t.department_id = d.id
        AND COALESCE(t.workflow_pack_key, 'development') = 'development'
+      WHERE d.id <> ?
       GROUP BY d.id
       ORDER BY d.sort_order ASC, d.id ASC
     `,
         )
-        .all();
+        .all(VIDEO_AUDIO_DEPARTMENT.id);
     }
 
     const recentActivity = db

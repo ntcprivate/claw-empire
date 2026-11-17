@@ -1,10 +1,14 @@
 node_modules/
+/node_modules.repair-*/
 dist/
 *.tsbuildinfo
 
 # Runtime artifacts
 logs/
 data/
+audio-output/
+video_output/
+**/claw-empire-audio/
 custom-skills/
 /tasks/
 *.log

@@ -30,6 +30,7 @@ import {
 } from "../../oauth/helpers.ts";
 import { registerAgentRoutes } from "./core/agents/index.ts";
 import { registerDepartmentRoutes } from "./core/departments.ts";
+import { registerAudioSpeechRoutes } from "./core/audio-speech.ts";
 import { registerGitHubRoutes } from "./core/github-routes.ts";
 import { registerProjectRoutes } from "./core/projects.ts";
 import { registerTaskCrudRoutes } from "./core/tasks/crud.ts";
@@ -226,6 +227,7 @@ export function registerRoutesPartA(ctx: RuntimeContext): Record<string, never> 
   // ===========================================================================
 
   registerUpdateAutoRoutes(__ctx);
+  registerAudioSpeechRoutes(app, db as any);
 
   // ---------------------------------------------------------------------------
   // Direct messenger channels

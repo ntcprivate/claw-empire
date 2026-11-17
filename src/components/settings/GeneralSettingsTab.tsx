@@ -1,5 +1,6 @@
 import type { CliProvider } from "../../types";
 import type { LocalSettings, SetLocalSettings, TFunction } from "./types";
+import VieNeuSpeechPanel from "./VieNeuSpeechPanel";
 
 interface GeneralSettingsTabProps {
   t: TFunction;
@@ -183,7 +184,31 @@ export default function GeneralSettingsTab({ t, form, setForm, saved, onSave }: 
             <option value="zh">{t({ ko: "중국어", en: "Chinese", ja: "中国語", zh: "中文" })}</option>
           </select>
         </div>
+
+        <div>
+          <label className="block text-xs mb-1" style={{ color: "var(--th-text-secondary)" }}>
+            {t({ ko: "AI 응답 언어", en: "AI response language", ja: "AI応答言語", zh: "AI 回复语言" })}
+          </label>
+          <select
+            value={form.agentLanguage}
+            onChange={(e) => setForm({ ...form, agentLanguage: e.target.value as LocalSettings["agentLanguage"] })}
+            className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition-colors"
+            style={{
+              background: "var(--th-input-bg)",
+              borderColor: "var(--th-input-border)",
+              color: "var(--th-text-primary)",
+            }}
+          >
+            <option value="vi">Tiếng Việt</option>
+            <option value="en">English</option>
+            <option value="ko">한국어</option>
+            <option value="ja">日本語</option>
+            <option value="zh">中文</option>
+          </select>
+        </div>
       </section>
+
+      <VieNeuSpeechPanel t={t} />
 
       <div className="flex justify-end gap-3">
         {saved && (

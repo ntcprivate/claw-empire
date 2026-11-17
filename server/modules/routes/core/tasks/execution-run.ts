@@ -5,6 +5,7 @@ import type { AgentRow } from "../../shared/types.ts";
 import { resolveConstrainedAgentScopeForTask, selectAutoAssignableAgentForTask } from "./execution-run-auto-assign.ts";
 import { buildWorkflowPackExecutionGuidance } from "../../../workflow/packs/execution-guidance.ts";
 import { resolveVideoArtifactSpecForTask } from "../../../workflow/packs/video-artifact.ts";
+import { isDelegatedVoiceoverTask, prepareVideoVoiceoverRun } from "../../../workflow/packs/video-voiceover.ts";
 import { ensureVideoPreprodRemotionBestPracticesSkill } from "../../../workflow/core/video-skill-bootstrap.ts";
 import {
   buildInterruptPromptBlock,
@@ -95,16 +96,21 @@ export function registerTaskRunRoute(deps: TaskRunRouteDeps): void {
           department_id: string | null;
           project_id: string | null;
           workflow_pack_key: string | null;
+          source_task_id?: string | null;
           project_path: string | null;
           status: string;
         }
       | undefined;
     if (!task) return res.status(404).json({ error: "not_found" });
     const taskLang = resolveLang(task.description ?? task.title);
+    const delegatedVoiceover = isDelegatedVoiceoverTask(db, id, task);
 
     if (activeProcesses.has(id)) {
       const staleChild = activeProcesses.get(id);
       const stalePid = typeof staleChild?.pid === "number" ? staleChild.pid : null;
+      if (stalePid !== null && stalePid < 0 && delegatedVoiceover) {
+        return res.status(409).json({ error: "voiceover_synthesis_active" });
+      }
       let pidIsAlive = false;
       if (stalePid !== null && stalePid > 0) {
         try {
@@ -142,7 +148,7 @@ export function registerTaskRunRoute(deps: TaskRunRouteDeps): void {
       const constrainedAgentIds = resolveConstrainedAgentScopeForTask(db as any, {
         workflow_pack_key: task.workflow_pack_key,
         department_id: task.department_id,
-        project_id: task.project_id,
+        project_id: delegatedVoiceover ? null : task.project_id,
       });
       if (
         Array.isArray(constrainedAgentIds) &&
@@ -315,6 +321,13 @@ export function registerTaskRunRoute(deps: TaskRunRouteDeps): void {
       });
     }
     const agentCwd = worktreePath;
+    let voiceover;
+    try {
+      voiceover = prepareVideoVoiceoverRun(db, id, task, projectPath, agentCwd, nowMs(), broadcast);
+    } catch {
+      appendTaskLog(id, "error", "Voiceover handoff unavailable. Check the narration script or the completed MP3.");
+      return res.status(409).json({ error: "video_voiceover_handoff_unavailable" });
+    }
 
     appendTaskLog(id, "system", `Git worktree created: ${worktreePath} (branch: climpire/${id.slice(0, 8)})`);
 
@@ -467,7 +480,10 @@ Whenever you complete a subtask, report it in this format:
         recentChanges ? `[Recent Changes]\n${recentChanges}` : "",
         `[Task] ${task.title}`,
         task.description ? `\n${task.description}` : "",
-        workflowPackGuidance ? `\n[Workflow Pack Execution Rules]\n${workflowPackGuidance}` : "",
+        workflowPackGuidance && !voiceover.replacesVideoRules
+          ? `\n[Workflow Pack Execution Rules]\n${workflowPackGuidance}`
+          : "",
+        voiceover.prompt,
         continuationCtx,
         conversationCtx,
         `\n---`,

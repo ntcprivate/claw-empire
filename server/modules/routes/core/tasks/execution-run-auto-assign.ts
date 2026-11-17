@@ -1,4 +1,5 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import { VIDEO_AUDIO_DEPARTMENT, VIDEO_AUDIO_PACK } from "../../../../../shared/video-audio-office.ts";
 import {
   DEFAULT_WORKFLOW_PACK_KEY,
   isWorkflowPackKey,
@@ -240,13 +241,19 @@ function loadPackProfileAgentScope(db: DbLike, packKey: WorkflowPackKey): string
   if (packKey === "development") return null;
 
   const profile = loadOfficePackProfileFromSettings(db, packKey);
-  if (!profile || profile.agents.length <= 0) return null;
-  const profileAgentIds = profile.agents.map((agent) => normalizeText(agent.id)).filter((id) => id.length > 0);
+  if (!profile) return null;
+  // Keep the new audio staff out of the generic video workflow unless the task targets their department.
+  const profileAgents =
+    packKey === VIDEO_AUDIO_PACK
+      ? profile.agents.filter((agent) => agent.department_id !== VIDEO_AUDIO_DEPARTMENT.id)
+      : profile.agents;
+  if (profileAgents.length === 0) return null;
+  const profileAgentIds = profileAgents.map((agent) => normalizeText(agent.id)).filter((id) => id.length > 0);
   const existingIds = selectExistingAgentIds(db, profileAgentIds);
   if (existingIds.length > 0) return existingIds;
 
   const profileDepartmentIds = Array.from(
-    new Set(profile.agents.map((agent) => normalizeText(agent.department_id)).filter((id) => id.length > 0)),
+    new Set(profileAgents.map((agent) => normalizeText(agent.department_id)).filter((id) => id.length > 0)),
   );
   const departmentScopedIds = selectAgentIdsByDepartments(db, profileDepartmentIds);
   if (departmentScopedIds.length > 0) return departmentScopedIds;
@@ -421,7 +428,15 @@ function selectCandidate(
 
 export function resolveConstrainedAgentScopeForTask(db: DbLike, task: CandidateTaskShape): string[] | null {
   const packKey = normalizePackKey(task.workflow_pack_key);
-  const packScope = loadPackProfileAgentScope(db, packKey);
+  // Older saved profiles predate the audio room. Its personnel already live in the pack-scoped agents table.
+  const packScope =
+    packKey === VIDEO_AUDIO_PACK && task.department_id === VIDEO_AUDIO_DEPARTMENT.id
+      ? (
+          db
+            .prepare("SELECT id FROM agents WHERE workflow_pack_key = ? AND department_id = ? ORDER BY created_at, id")
+            .all(packKey, VIDEO_AUDIO_DEPARTMENT.id) as { id: string }[]
+        ).map((agent) => agent.id)
+      : loadPackProfileAgentScope(db, packKey);
   const manualScope = loadManualProjectAgentScope(db, task.project_id);
   return combineAgentScopes(packScope, manualScope);
 }

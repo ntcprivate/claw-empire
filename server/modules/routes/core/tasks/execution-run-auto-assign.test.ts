@@ -93,6 +93,51 @@ function insertAgent(
 }
 
 describe("selectAutoAssignableAgentForTask", () => {
+  it("routes the audio department to its video agents even when the saved profile predates it", () => {
+    const db = setupDb();
+    try {
+      db.exec("ALTER TABLE agents ADD COLUMN workflow_pack_key TEXT NOT NULL DEFAULT 'development'");
+      insertAgent(db, { id: "video_preprod-seed-1", name: "Legacy Producer", department_id: "planning" });
+      insertAgent(db, {
+        id: "video_preprod-seed-99",
+        name: "Audio Producer",
+        department_id: "voice_audio",
+        role: "team_leader",
+      });
+      db.prepare("UPDATE agents SET workflow_pack_key = 'video_preprod' WHERE id LIKE 'video_preprod-%'").run();
+      insertAgent(db, { id: "unrelated-voice", name: "Other Agent", department_id: "voice_audio" });
+      db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run(
+        "officePackProfiles",
+        JSON.stringify({ video_preprod: { agents: [{ id: "video_preprod-seed-1", department_id: "planning" }] } }),
+      );
+
+      expect(
+        resolveConstrainedAgentScopeForTask(db, {
+          workflow_pack_key: "video_preprod",
+          department_id: "voice_audio",
+        }),
+      ).toEqual(["video_preprod-seed-99"]);
+      db.prepare("UPDATE settings SET value = ? WHERE key = 'officePackProfiles'").run(
+        JSON.stringify({
+          video_preprod: {
+            agents: [
+              { id: "video_preprod-seed-1", department_id: "planning" },
+              { id: "video_preprod-seed-99", department_id: "voice_audio" },
+            ],
+          },
+        }),
+      );
+      expect(
+        resolveConstrainedAgentScopeForTask(db, {
+          workflow_pack_key: "video_preprod",
+          department_id: "planning",
+        }),
+      ).toEqual(["video_preprod-seed-1"]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("오피스팩별 우선 부서가 다르게 적용된다", () => {
     const db = setupDb();
     try {

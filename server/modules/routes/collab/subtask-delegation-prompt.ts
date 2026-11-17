@@ -1,5 +1,6 @@
 import type { Lang } from "../../../types/lang.ts";
 import { getDepartmentPromptForPack } from "../../workflow/packs/department-scope.ts";
+import { VIDEO_AUDIO_QA_MARKER } from "../../workflow/packs/video-voiceover.ts";
 import type { AgentRow } from "./direct-chat.ts";
 import type { L10n } from "./language-policy.ts";
 import type { SubtaskRow } from "./subtask-summary.ts";
@@ -182,7 +183,9 @@ export function createSubtaskDelegationPromptBuilder(deps: PromptDeps) {
     const deptPrompt = typeof deptPromptRaw === "string" ? deptPromptRaw.trim() : "";
     const deptPromptBlock = deptPrompt ? `[Department Shared Prompt]\n${deptPrompt}` : "";
     const videoRuntimeRuleBlock =
-      parentDept?.workflow_pack_key === "video_preprod"
+      parentDept?.workflow_pack_key === "video_preprod" &&
+      targetDeptId !== "voice_audio" &&
+      !assignedSubtasks.some((subtask) => subtask.title.startsWith(VIDEO_AUDIO_QA_MARKER))
         ? pickL(
             l(
               [

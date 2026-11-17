@@ -1,4 +1,10 @@
 import type { Agent, Department, WorkflowPackKey } from "../types";
+import {
+  VIDEO_AUDIO_AGENT,
+  VIDEO_AUDIO_AGENT_ID,
+  VIDEO_AUDIO_DEPARTMENT,
+  VIDEO_AUDIO_PACK,
+} from "../../shared/video-audio-office";
 
 function parseSeedPackKey(agentId: string): string | null {
   const normalized = String(agentId ?? "").trim();
@@ -32,7 +38,15 @@ export function resolvePackDepartmentsForDisplay(params: {
   packDepartments?: Department[] | null;
   preferPackProfile?: boolean;
 }): Department[] {
-  const { packKey, globalDepartments, packDepartments, preferPackProfile = true } = params;
+  const { packKey, preferPackProfile = true } = params;
+  const globalDepartments =
+    packKey === VIDEO_AUDIO_PACK
+      ? params.globalDepartments
+      : params.globalDepartments.filter((dept) => dept.id !== VIDEO_AUDIO_DEPARTMENT.id);
+  const packDepartments =
+    packKey === VIDEO_AUDIO_PACK
+      ? params.packDepartments
+      : params.packDepartments?.filter((dept) => dept.id !== VIDEO_AUDIO_DEPARTMENT.id);
   if (packKey === "development" || !packDepartments || packDepartments.length === 0) {
     return globalDepartments;
   }
@@ -64,8 +78,31 @@ export function resolvePackAgentViews(params: {
     globalById.set(agent.id, agent);
   }
 
-  const scopedAgents = packAgents.map((packAgent) => mergePackAgent(globalById.get(packAgent.id), packAgent));
+  const existingAudioProducer =
+    packKey === VIDEO_AUDIO_PACK &&
+    globalAgents.some(
+      (agent) =>
+        agent.workflow_pack_key === VIDEO_AUDIO_PACK &&
+        agent.department_id === VIDEO_AUDIO_DEPARTMENT.id &&
+        agent.role === "team_leader" &&
+        agent.name.toLowerCase() === VIDEO_AUDIO_AGENT.name.toLowerCase(),
+    );
+  const scopedAgents = packAgents
+    .filter((agent) => !existingAudioProducer || agent.id !== VIDEO_AUDIO_AGENT_ID || globalById.has(agent.id))
+    .map((packAgent) => mergePackAgent(globalById.get(packAgent.id), packAgent));
   const scopedAgentIds = new Set(scopedAgents.map((agent) => agent.id));
+  if (packKey === VIDEO_AUDIO_PACK) {
+    for (const agent of globalAgents) {
+      if (
+        agent.workflow_pack_key === VIDEO_AUDIO_PACK &&
+        agent.department_id === VIDEO_AUDIO_DEPARTMENT.id &&
+        !scopedAgentIds.has(agent.id)
+      ) {
+        scopedAgents.push(agent);
+        scopedAgentIds.add(agent.id);
+      }
+    }
+  }
   const mergedAgents = [
     ...scopedAgents,
     ...globalAgents.filter((agent) => {

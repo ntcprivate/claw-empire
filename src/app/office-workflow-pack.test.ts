@@ -3,6 +3,7 @@ import type { Department } from "../types";
 import {
   buildOfficePackPresentation,
   buildOfficePackStarterAgents,
+  resolveOfficePackSeedAgentId,
   resolveOfficePackSeedProvider,
 } from "./office-workflow-pack";
 
@@ -143,6 +144,29 @@ describe("resolveOfficePackSeedProvider", () => {
 });
 
 describe("buildOfficePackPresentation", () => {
+  it("adds one Audio Producer and one Voice & Audio room only to the video pack", () => {
+    const departments = [makeDepartment("planning"), makeDepartment("dev"), makeDepartment("qa")];
+    const common = { locale: "en" as const, departments, agents: [], customRoomThemes: {} };
+    const video = buildOfficePackPresentation({ ...common, packKey: "video_preprod" });
+    const audioDepartment = video.departments.find((department) => department.id === "voice_audio");
+    expect(audioDepartment).toMatchObject({ name: "Voice & Audio", icon: "🎙️" });
+    expect(video.roomThemes.voice_audio).toBeDefined();
+
+    const drafts = buildOfficePackStarterAgents({
+      packKey: "video_preprod",
+      departments: video.departments,
+      targetCount: 8,
+    });
+    const audioProducers = drafts.filter((draft) => draft.department_id === "voice_audio");
+    expect(audioProducers).toHaveLength(1);
+    expect(audioProducers[0]).toMatchObject({ name: "Audio Producer", role: "team_leader" });
+    expect(resolveOfficePackSeedAgentId("video_preprod", "voice_audio", 8)).toBe("video_preprod-seed-99");
+    expect(drafts).toHaveLength(9);
+
+    const report = buildOfficePackPresentation({ ...common, packKey: "report", departments: video.departments });
+    expect(report.departments.some((department) => department.id === "voice_audio")).toBe(false);
+  });
+
   it("비개발 팩 부서 설명/프롬프트를 locale 기준으로 생성한다", () => {
     const presentationEn = buildOfficePackPresentation({
       packKey: "report",

@@ -1,6 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
+import { applyBaseSchema } from "../../bootstrap/schema/base-schema.ts";
+import { applyTaskSchemaMigrations } from "../../bootstrap/schema/task-schema-migrations.ts";
+import { getDepartmentForPack, listDepartmentsForPack } from "../../workflow/packs/department-scope.ts";
 import { registerOpsSettingsStatsRoutes } from "./settings-stats.ts";
 
 type RouteHandler = (req: any, res: any) => any;
@@ -113,6 +116,75 @@ function createHarness(db: DatabaseSync) {
 }
 
 describe("ops settings seed init guard", () => {
+  it("adds Voice & Audio on first select through the existing pack hydration", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      applyBaseSchema(db);
+      const { putRoutes } = createHarness(db);
+      const response = createFakeResponse();
+      putRoutes.get("/api/settings")?.(
+        {
+          body: {
+            officeWorkflowPack: "video_preprod",
+            officePackProfiles: { video_preprod: { departments: [{ id: "planning" }], agents: [] } },
+          },
+        },
+        response,
+      );
+      expect(response.statusCode).toBe(200);
+      expect(getDepartmentForPack(db, "video_preprod", "voice_audio")).toMatchObject({
+        name: "Voice & Audio",
+        icon: "🎙️",
+      });
+      expect(listDepartmentsForPack(db, "development")).toEqual([]);
+      expect(getDepartmentForPack(db, "development", "voice_audio")).toBeNull();
+      expect(db.prepare("SELECT name, department_id, workflow_pack_key, role FROM agents").all()).toMatchObject([
+        {
+          name: "Audio Producer",
+          department_id: "voice_audio",
+          workflow_pack_key: "video_preprod",
+          role: "team_leader",
+        },
+      ]);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("backfills an existing video pack once without overwriting its staff or department edits", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      applyBaseSchema(db);
+      db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run(
+        "officePackHydratedPacks",
+        JSON.stringify(["video_preprod"]),
+      );
+      createHarness(db);
+      db.prepare("UPDATE agents SET cli_provider = 'claude' WHERE id = ?").run("video_preprod-seed-99");
+      db.prepare("UPDATE office_pack_departments SET name = ? WHERE department_id = ?").run(
+        "Audio Studio",
+        "voice_audio",
+      );
+
+      db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run(
+        "officePackProfiles",
+        JSON.stringify({ video_preprod: { departments: [{ id: "voice_audio", name: "Voice & Audio" }] } }),
+      );
+      applyTaskSchemaMigrations(db);
+      createHarness(db);
+      expect(db.prepare("SELECT name, cli_provider FROM agents").all()).toMatchObject([
+        { name: "Audio Producer", cli_provider: "claude" },
+      ]);
+      expect(listDepartmentsForPack(db, "video_preprod")).toMatchObject([{ id: "voice_audio", name: "Audio Studio" }]);
+      db.prepare("DELETE FROM agents WHERE id = ?").run("video_preprod-seed-99");
+      createHarness(db);
+      expect(db.prepare("SELECT id FROM agents").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("서버 재시작 시 officePackProfiles가 있어도 seed agent를 대량 주입하지 않는다", () => {
     const db = setupDb();
     try {

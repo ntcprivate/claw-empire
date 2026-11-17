@@ -444,37 +444,38 @@ export function ChatPanel({
         messagesEndRef={messagesEndRef}
       />
 
-      <ProjectFlowDialog
-        open={projectFlowOpen}
-        step={projectFlowStep}
-        isDirectivePending={isDirectivePending}
-        pendingContent={pendingSend?.content ?? ""}
-        projectLoading={projectLoading}
-        projectItems={projectItems}
-        selectedProject={selectedProject}
-        existingProjectInput={existingProjectInput}
-        existingProjectError={existingProjectError}
-        newProjectName={newProjectName}
-        newProjectPath={newProjectPath}
-        newProjectGoal={newProjectGoal}
-        projectSaving={projectSaving}
-        canCreateProject={canCreateProject}
-        tr={tr}
-        onClose={closeProjectFlow}
-        onChooseExisting={handleChooseExistingProject}
-        onChooseNew={() => setProjectFlowStep("new")}
-        onBackToChoose={() => setProjectFlowStep("choose")}
-        onSelectExistingProject={handleSelectExistingProject}
-        onExistingProjectInputChange={handleExistingProjectInputChange}
-        onApplyExistingProjectSelection={applyExistingProjectSelection}
-        onNewProjectNameChange={setNewProjectName}
-        onNewProjectPathChange={setNewProjectPath}
-        onNewProjectGoalChange={setNewProjectGoal}
-        onCreateProject={() => {
-          void handleCreateProject();
-        }}
-        onConfirm={handleConfirmProject}
-      />
+      {projectFlowOpen && (
+        <ProjectFlowDialog
+          step={projectFlowStep}
+          isDirectivePending={isDirectivePending}
+          pendingContent={pendingSend?.content ?? ""}
+          projectLoading={projectLoading}
+          projectItems={projectItems}
+          selectedProject={selectedProject}
+          existingProjectInput={existingProjectInput}
+          existingProjectError={existingProjectError}
+          newProjectName={newProjectName}
+          newProjectPath={newProjectPath}
+          newProjectGoal={newProjectGoal}
+          projectSaving={projectSaving}
+          canCreateProject={canCreateProject}
+          tr={tr}
+          onClose={closeProjectFlow}
+          onChooseExisting={handleChooseExistingProject}
+          onChooseNew={() => setProjectFlowStep("new")}
+          onBackToChoose={() => setProjectFlowStep("choose")}
+          onSelectExistingProject={handleSelectExistingProject}
+          onExistingProjectInputChange={handleExistingProjectInputChange}
+          onApplyExistingProjectSelection={applyExistingProjectSelection}
+          onNewProjectNameChange={setNewProjectName}
+          onNewProjectPathChange={setNewProjectPath}
+          onNewProjectGoalChange={setNewProjectGoal}
+          onCreateProject={() => {
+            void handleCreateProject();
+          }}
+          onConfirm={handleConfirmProject}
+        />
+      )}
 
       <ChatComposer
         mode={mode}

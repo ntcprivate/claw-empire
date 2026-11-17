@@ -30,6 +30,7 @@ import {
   getOfficePackRoomThemes,
   listOfficePackOptions,
   normalizeOfficeWorkflowPack,
+  resolveOfficePackSeedAgentId,
   resolveOfficePackSeedProvider,
 } from "./office-workflow-pack";
 import { resolvePackAgentViews, resolvePackDepartmentsForDisplay } from "./office-pack-display";
@@ -239,7 +240,7 @@ export default function AppMainLayout({
     });
     const now = Date.now();
     return drafts.map((draft, index) => ({
-      id: `${officePackKey}-seed-${index + 1}`,
+      id: resolveOfficePackSeedAgentId(officePackKey, draft.department_id, index),
       name: draft.name,
       name_ko: draft.name_ko,
       name_ja: draft.name_ja,

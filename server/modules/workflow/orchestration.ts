@@ -614,6 +614,7 @@ export function initializeWorkflowPartC(ctx: RuntimeContext): WorkflowOrchestrat
   const runCompleteHandler = createRunCompleteHandler({
     activeProcesses,
     stopProgressTimer,
+    getNextHttpAgentPid,
     db,
     stopRequestedTasks,
     stopRequestModeByTask,

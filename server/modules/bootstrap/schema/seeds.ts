@@ -116,6 +116,13 @@ export function applyDefaultSeeds(db: DbLike): void {
       db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run("language", "en");
     }
 
+    const hasAgentLanguageSetting = db
+      .prepare("SELECT 1 FROM settings WHERE key = 'agentLanguage' LIMIT 1")
+      .get() as { 1: number } | undefined;
+    if (!hasAgentLanguageSetting) {
+      db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run("agentLanguage", JSON.stringify("vi"));
+    }
+
     const hasOAuthAutoSwapSetting = db.prepare("SELECT 1 FROM settings WHERE key = 'oauthAutoSwap' LIMIT 1").get() as
       | { 1: number }
       | undefined;

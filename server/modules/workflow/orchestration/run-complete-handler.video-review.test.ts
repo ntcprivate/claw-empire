@@ -4,6 +4,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createRunCompleteHandler } from "./run-complete-handler.ts";
+import * as vieneu from "../packs/vieneu-tts.ts";
+import { VOICEOVER_MARKER, voiceoverPaths } from "../packs/video-voiceover.ts";
 
 function createDb(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
@@ -54,6 +56,7 @@ function createDeps(db: DatabaseSync, logsDir = "/tmp") {
   return {
     activeProcesses: new Map<string, unknown>(),
     stopProgressTimer: vi.fn(),
+    getNextHttpAgentPid: () => -1,
     db,
     stopRequestedTasks: new Set<string>(),
     stopRequestModeByTask: new Map<string, "pause" | "cancel">(),
@@ -101,6 +104,75 @@ function createDeps(db: DatabaseSync, logsDir = "/tmp") {
 }
 
 describe("run complete handler - video preprod review transition", () => {
+  it.each([true, false])(
+    "keeps the delegated narration open until backend synthesis finishes (success=%s)",
+    async (success) => {
+      const db = createDb();
+      const project = fs.mkdtempSync(path.join(os.tmpdir(), "claw-audio-completion-"));
+      const parent = "parent-video";
+      const taskId = "child-audio";
+      const worktree = path.join(project, "audio-worktree");
+      const paths = voiceoverPaths(parent);
+      let finishGeneration: () => void = () => {};
+      const generator = vi.spyOn(vieneu, "generateVieNeuSpeech").mockImplementation(
+        ({ outputPath }) =>
+          new Promise((resolve, reject) => {
+            finishGeneration = () => {
+              if (!success) return reject(new vieneu.VieNeuTtsError("unavailable"));
+              fs.writeFileSync(path.join(project, outputPath), "mock mp3");
+              resolve({
+                outputPath,
+                bytes: 8,
+                durationSeconds: 1.25,
+                voice: "Minh Quân",
+                cues: [{ text: "Xin chào", startSeconds: 0, endSeconds: 1.25 }],
+                engine: "vieneu-tts",
+              });
+            };
+          }),
+      );
+      try {
+        db.prepare(
+          `INSERT INTO tasks (id, title, status, workflow_pack_key, source_task_id, project_path, department_id)
+                  VALUES (?, ?, 'in_progress', 'video_preprod', ?, ?, 'voice_audio')`,
+        ).run(taskId, VOICEOVER_MARKER, parent, project);
+        db.prepare(
+          `INSERT INTO subtasks (id, title, task_id, status, target_department_id, delegated_task_id)
+                  VALUES ('voice-subtask', ?, ?, 'in_progress', 'voice_audio', ?)`,
+        ).run(VOICEOVER_MARKER, parent, taskId);
+        fs.mkdirSync(path.dirname(path.join(project, paths.script)), { recursive: true });
+        fs.mkdirSync(path.dirname(path.join(worktree, paths.settings)), { recursive: true });
+        fs.writeFileSync(path.join(project, paths.script), "Xin chào");
+        fs.writeFileSync(path.join(worktree, paths.settings), JSON.stringify({ speed: 0.95 }));
+        const deps = createDeps(db, project);
+        deps.taskWorktrees.set(taskId, { projectPath: project, worktreePath: worktree });
+        const handler = createRunCompleteHandler(deps);
+        handler.handleTaskRunComplete(taskId, 0);
+        handler.handleTaskRunComplete(taskId, 0);
+        expect(db.prepare("SELECT status FROM tasks WHERE id = ?").get(taskId)).toEqual({ status: "in_progress" });
+        expect(deps.processSubtaskDelegations).not.toHaveBeenCalled();
+        expect(generator).toHaveBeenCalledOnce();
+        expect(generator).toHaveBeenCalledWith(expect.objectContaining({ text: "Xin chào", speed: 0.95 }));
+        finishGeneration();
+        await vi.waitFor(() =>
+          expect(db.prepare("SELECT status FROM tasks WHERE id = ?").get(taskId)).toEqual({
+            status: success ? "review" : "inbox",
+          }),
+        );
+        if (success) {
+          expect(deps.reconcileDelegatedSubtasksAfterRun).toHaveBeenCalledWith(taskId, 0);
+          expect(deps.processSubtaskDelegations).toHaveBeenCalledWith(parent, { includeRender: true });
+        } else {
+          expect(deps.reconcileDelegatedSubtasksAfterRun).toHaveBeenCalledWith(taskId, 89);
+          expect(deps.processSubtaskDelegations).not.toHaveBeenCalled();
+        }
+      } finally {
+        generator.mockRestore();
+        db.close();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+  );
   it("루트 video_preprod는 서브태스크가 남아도 성공 시 review로 진입한다", () => {
     const db = createDb();
     try {

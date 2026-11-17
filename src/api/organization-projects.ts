@@ -214,6 +214,40 @@ export async function getTask(id: string): Promise<{ task: Task; logs: TaskLog[]
   return request(`/api/tasks/${id}`);
 }
 
+export type SpeechJob = {
+  id: string;
+  taskId: string | null;
+  status: "queued" | "running" | "done" | "failed";
+  error?: string;
+  outputPath?: string;
+  bytes?: number;
+  durationSeconds?: number;
+  voice?: string;
+  cues?: Array<{ text: string; startSeconds: number; endSeconds: number }>;
+  engine?: string;
+  createdAt: number;
+  audioUrl?: string;
+};
+
+export async function getSpeechJobs(): Promise<SpeechJob[]> {
+  const response = await request<{ jobs: SpeechJob[] }>("/api/audio/speech");
+  return response.jobs;
+}
+
+export async function generateSpeech(input: {
+  taskId?: string;
+  text: string;
+  voice: string;
+  speed: number;
+}): Promise<{ id: string; status: "queued" | "running" }> {
+  return post("/api/audio/speech", input);
+}
+
+export async function getSpeechJob(id: string): Promise<SpeechJob> {
+  const response = await request<{ job: SpeechJob }>(`/api/audio/speech/${encodeURIComponent(id)}`);
+  return response.job;
+}
+
 export async function createTask(input: {
   title: string;
   description?: string;

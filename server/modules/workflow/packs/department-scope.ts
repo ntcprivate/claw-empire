@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { VIDEO_AUDIO_DEPARTMENT } from "../../../../shared/video-audio-office.ts";
 import { DEFAULT_WORKFLOW_PACK_KEY, isWorkflowPackKey, type WorkflowPackKey } from "./definitions.ts";
 
 type DbLike = Pick<DatabaseSync, "prepare">;
@@ -132,6 +133,7 @@ export function getDepartmentForPack(
     }
   }
 
+  if (departmentId === VIDEO_AUDIO_DEPARTMENT.id) return null;
   try {
     const baseRow = db
       .prepare(
@@ -179,10 +181,11 @@ export function listDepartmentsForPack(db: DbLike, packKeyInput: unknown): Depar
         `
           SELECT id, name, name_ko, name_ja, name_zh, icon, color, description, prompt, sort_order, created_at
           FROM departments
+          WHERE id <> ?
           ORDER BY sort_order ASC, id ASC
         `,
       )
-      .all() as Record<string, unknown>[];
+      .all(VIDEO_AUDIO_DEPARTMENT.id) as Record<string, unknown>[];
     return baseRows.map((row) => mapBaseDepartmentRow(row)).filter((row): row is DepartmentScopedRow => !!row);
   } catch {
     return [];

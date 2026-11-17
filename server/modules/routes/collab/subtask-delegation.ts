@@ -1,6 +1,13 @@
 import type { Lang } from "../../../types/lang.ts";
 import type { AgentRow } from "./direct-chat.ts";
 import { reconcileVideoRenderDelegationState } from "../../workflow/orchestration/video-render-delegation-state.ts";
+import {
+  getVoiceoverSubtask,
+  hasFinishedNarratedStage,
+  isDelegatedVoiceoverTask,
+  VIDEO_AUDIO_QA_MARKER,
+  VIDEO_RENDER_MARKER,
+} from "../../workflow/packs/video-voiceover.ts";
 import { readYoloModeEnabled } from "../../routes/ops/messages/decision-inbox/yolo-mode.ts";
 import { createSubtaskDelegationBatch } from "./subtask-delegation-batch.ts";
 import { createSubtaskDelegationPromptBuilder } from "./subtask-delegation-prompt.ts";
@@ -254,12 +261,7 @@ export function initializeSubtaskDelegation(deps: SubtaskDelegationDeps) {
       )
       .all(taskId) as unknown as SubtaskRow[];
 
-    // VIDEO_FINAL_RENDER must wait for other subtasks — exclude from initial batch
-    const eligible = opts?.includeRender
-      ? foreignSubtasks
-      : foreignSubtasks.filter((s) => !String(s.title ?? "").includes("[VIDEO_FINAL_RENDER]"));
-
-    if (eligible.length === 0) return;
+    if (foreignSubtasks.length === 0) return;
 
     const parentTask = db.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as
       | {
@@ -270,9 +272,27 @@ export function initializeSubtaskDelegation(deps: SubtaskDelegationDeps) {
           project_id: string | null;
           project_path: string | null;
           department_id: string | null;
+          workflow_pack_key: string | null;
         }
       | undefined;
     if (!parentTask) return;
+    const voiceover = parentTask.workflow_pack_key === "video_preprod" ? getVoiceoverSubtask(db, taskId) : undefined;
+    if (voiceover && !["review", "done"].includes(parentTask.status)) return;
+    const renderAllowed = voiceover
+      ? voiceover.status === "done" &&
+        !db
+          .prepare(
+            "SELECT 1 FROM subtasks WHERE task_id = ? AND status NOT IN ('done', 'cancelled') AND title NOT LIKE ? AND title NOT LIKE ? LIMIT 1",
+          )
+          .get(taskId, `%${VIDEO_RENDER_MARKER}%`, `${VIDEO_AUDIO_QA_MARKER}%`)
+      : opts?.includeRender;
+    const qaAllowed = voiceover?.status === "done" && hasFinishedNarratedStage(db, taskId, VIDEO_RENDER_MARKER);
+    const eligible = foreignSubtasks.filter((subtask) => {
+      if (subtask.title.includes(VIDEO_RENDER_MARKER)) return renderAllowed;
+      if (subtask.title.startsWith(VIDEO_AUDIO_QA_MARKER)) return qaAllowed;
+      return true;
+    });
+    if (eligible.length === 0) return;
     const lang = resolveLang(parentTask.description ?? parentTask.title);
 
     // Origin team first: defer foreign delegation until origin team reaches review (work complete)
@@ -358,7 +378,12 @@ export function initializeSubtaskDelegation(deps: SubtaskDelegationDeps) {
         )
         .all(parentTaskId) as unknown as SubtaskRow[];
 
-      const nonRenderRemaining = remaining.cnt - pendingRender.length;
+      const pendingAudioQa = db
+        .prepare(
+          "SELECT 1 FROM subtasks WHERE task_id = ? AND title LIKE ? AND status NOT IN ('done', 'cancelled') LIMIT 1",
+        )
+        .get(parentTaskId, `${VIDEO_AUDIO_QA_MARKER}%`);
+      const nonRenderRemaining = remaining.cnt - pendingRender.length - Number(Boolean(pendingAudioQa));
 
       if (nonRenderRemaining === 0 && pendingRender.length > 0) {
         const repair = reconcileVideoRenderDelegationState({ db, nowMs, broadcast }, pendingRender);
@@ -521,6 +546,19 @@ export function initializeSubtaskDelegation(deps: SubtaskDelegationDeps) {
 
   function finalizeDelegatedSubtasks(delegatedTaskId: string, subtaskIds: string[], exitCode: number): void {
     if (subtaskIds.length === 0) return;
+    const delegatedTask = db.prepare("SELECT * FROM tasks WHERE id = ?").get(delegatedTaskId);
+    if (
+      delegatedTask &&
+      (isDelegatedVoiceoverTask(db, delegatedTaskId, delegatedTask) ||
+        (delegatedTask.workflow_pack_key === "video_preprod" &&
+          delegatedTask.source_task_id &&
+          delegatedTask.title.includes(VIDEO_RENDER_MARKER) &&
+          getVoiceoverSubtask(db, delegatedTask.source_task_id)))
+    ) {
+      delegatedTaskToSubtask.delete(delegatedTaskId);
+      handleTaskRunComplete(delegatedTaskId, exitCode);
+      return;
+    }
 
     const pausedRun =
       exitCode !== 0 &&

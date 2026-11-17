@@ -10,6 +10,7 @@ function makeAgent(input: Partial<Agent> & { id: string; name: string; name_ko: 
     name_ja: input.name_ja ?? input.name,
     name_zh: input.name_zh ?? input.name,
     department_id: input.department_id ?? "planning",
+    workflow_pack_key: input.workflow_pack_key,
     role: input.role ?? "senior",
     cli_provider: input.cli_provider ?? "codex",
     avatar_emoji: input.avatar_emoji ?? "A",
@@ -40,6 +41,24 @@ function makeDepartment(input: Partial<Department> & { id: string; name: string;
 }
 
 describe("office pack display helpers", () => {
+  it("includes the backend Audio Producer when a legacy video profile lacks the new agent", () => {
+    const legacy = makeAgent({ id: "video_preprod-seed-1", name: "Legacy", name_ko: "Legacy" });
+    const producer = makeAgent({
+      id: "video_preprod-seed-99",
+      name: "Audio Producer",
+      name_ko: "Audio Producer",
+      department_id: "voice_audio",
+      workflow_pack_key: "video_preprod",
+    });
+    const { scopedAgents, mergedAgents } = resolvePackAgentViews({
+      packKey: "video_preprod",
+      globalAgents: [legacy, producer],
+      packAgents: [legacy],
+    });
+    expect(scopedAgents).toEqual([legacy, producer]);
+    expect(mergedAgents).toEqual([legacy, producer]);
+  });
+
   it("prefers DB agent values and uses pack agent only as fallback", () => {
     const globalAgent = makeAgent({
       id: "report-seed-1",

@@ -362,6 +362,8 @@ export interface OfficePackProfile {
 
 export type OfficePackProfiles = Partial<Record<WorkflowPackKey, OfficePackProfile>>;
 
+export type AgentLanguage = "ko" | "en" | "ja" | "zh" | "vi";
+
 export interface CompanySettings {
   companyName: string;
   ceoName: string;
@@ -372,6 +374,7 @@ export interface CompanySettings {
   oauthAutoSwap?: boolean;
   theme: "dark" | "light";
   language: UiLanguage;
+  agentLanguage: AgentLanguage;
   defaultProvider: CliProvider;
   officeWorkflowPack?: WorkflowPackKey;
   providerModelConfig?: Record<string, ProviderModelConfig>;
@@ -391,6 +394,7 @@ export const DEFAULT_SETTINGS: CompanySettings = {
   oauthAutoSwap: true,
   theme: "dark",
   language: "en",
+  agentLanguage: "vi",
   defaultProvider: "claude",
   officeWorkflowPack: "development",
   providerModelConfig: {

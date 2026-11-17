@@ -200,14 +200,14 @@ function resolveProjectProgressTarget(
 
 function resolveProgressStatusLabel(status: string, lang: Lang): string {
   const labels: Record<string, Record<Lang, string>> = {
-    inbox: { ko: "접수", en: "Inbox", ja: "受信", zh: "收件" },
-    planned: { ko: "계획", en: "Planned", ja: "計画", zh: "计划" },
-    collaborating: { ko: "협업", en: "Collaborating", ja: "協業", zh: "协作" },
-    in_progress: { ko: "진행", en: "In Progress", ja: "進行中", zh: "进行中" },
-    review: { ko: "검토", en: "Review", ja: "レビュー", zh: "评审" },
-    pending: { ko: "보류", en: "Pending", ja: "保留", zh: "待处理" },
-    done: { ko: "완료", en: "Done", ja: "完了", zh: "完成" },
-    cancelled: { ko: "취소", en: "Cancelled", ja: "取消", zh: "取消" },
+    inbox: { ko: "접수", en: "Inbox", ja: "受信", zh: "收件", vi: "Hộp thư" },
+    planned: { ko: "계획", en: "Planned", ja: "計画", zh: "计划", vi: "Đã lên kế hoạch" },
+    collaborating: { ko: "협업", en: "Collaborating", ja: "協業", zh: "协作", vi: "Đang phối hợp" },
+    in_progress: { ko: "진행", en: "In Progress", ja: "進行中", zh: "进行中", vi: "Đang thực hiện" },
+    review: { ko: "검토", en: "Review", ja: "レビュー", zh: "评审", vi: "Đang duyệt" },
+    pending: { ko: "보류", en: "Pending", ja: "保留", zh: "待处理", vi: "Đang chờ" },
+    done: { ko: "완료", en: "Done", ja: "完了", zh: "完成", vi: "Hoàn tất" },
+    cancelled: { ko: "취소", en: "Cancelled", ja: "取消", zh: "取消", vi: "Đã hủy" },
   };
   return labels[status]?.[lang] ?? status;
 }
