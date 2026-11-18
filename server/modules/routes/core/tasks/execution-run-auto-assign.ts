@@ -46,6 +46,7 @@ const PACK_DEPARTMENT_PRIORITIES: Record<WorkflowPackKey, string[]> = {
   report: ["planning", "qa", "design", "dev", "operations", "devsecops"],
   web_research_report: ["dev", "planning", "qa", "design", "operations", "devsecops"],
   video_preprod: ["design", "planning", "dev", "operations", "qa", "devsecops"],
+  video_production: [],
   novel: ["design", "planning", "dev", "qa", "operations", "devsecops"],
   roleplay: ["design", "planning", "qa", "dev", "operations", "devsecops"],
 };
@@ -446,6 +447,7 @@ export function selectAutoAssignableAgentForTask(
   task: CandidateTaskShape,
 ): AutoAssignSelectionResult | null {
   const packKey = normalizePackKey(task.workflow_pack_key);
+  if (packKey === "video_production") return null;
   const preferredDeptIds = buildPreferredDepartmentOrder(packKey, task.department_id);
   const constrainedAgentIds = resolveConstrainedAgentScopeForTask(db, task);
 

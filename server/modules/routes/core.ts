@@ -33,6 +33,7 @@ import { registerDepartmentRoutes } from "./core/departments.ts";
 import { registerAudioSpeechRoutes } from "./core/audio-speech.ts";
 import { registerGitHubRoutes } from "./core/github-routes.ts";
 import { registerProjectRoutes } from "./core/projects.ts";
+import { registerVideoProductionRoutes } from "./core/video-production.ts";
 import { registerTaskCrudRoutes } from "./core/tasks/crud.ts";
 import { registerTaskExecutionRoutes } from "./core/tasks/execution.ts";
 import { registerTaskSubtaskRoutes } from "./core/tasks/subtasks.ts";
@@ -351,6 +352,7 @@ export function registerRoutesPartA(ctx: RuntimeContext): Record<string, never> 
     runInTransaction,
     nowMs,
   });
+  registerVideoProductionRoutes({ app, db, broadcast, activeProcesses, stopProgressTimer });
 
   // ---------------------------------------------------------------------------
   // Agents

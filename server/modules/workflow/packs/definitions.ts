@@ -3,6 +3,7 @@ export const WORKFLOW_PACK_KEYS = [
   "novel",
   "report",
   "video_preprod",
+  "video_production",
   "web_research_report",
   "roleplay",
 ] as const;
@@ -33,6 +34,28 @@ const COMMON_COST_PROFILE = {
 };
 
 export const DEFAULT_WORKFLOW_PACK_SEEDS: WorkflowPackSeed[] = [
+  {
+    key: "video_production",
+    name: "Video Production",
+    inputSchema: {
+      required: [
+        "title",
+        "objective",
+        "targetAudience",
+        "duration",
+        "aspectRatio",
+        "language",
+        "style",
+        "deliveryPlatform",
+        "constraints",
+      ],
+    },
+    promptPreset: { mode: "video_production_planning", humanApprovalRequired: true },
+    qaRules: { requireApprovedPlanVersion: true, rejectUnsupportedStages: true },
+    outputTemplate: { sections: ["project_brief", "production_plan", "pending_approval"] },
+    routingKeywords: ["[video_production]"],
+    costProfile: { ...COMMON_COST_PROFILE, maxRounds: 1, defaultReasoning: "medium" },
+  },
   {
     key: "development",
     name: "Development",

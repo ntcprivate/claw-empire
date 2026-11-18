@@ -33,7 +33,7 @@ import {
   resolveOfficePackSeedAgentId,
   resolveOfficePackSeedProvider,
 } from "./office-workflow-pack";
-import { resolvePackAgentViews, resolvePackDepartmentsForDisplay } from "./office-pack-display";
+import { resolvePackAgentViews, resolvePackDepartmentsForDisplay, videoProductionAgentsFromDatabase, videoProductionDepartmentsFromDatabase } from "./office-pack-display";
 import { applyOfficePackToTaskInput, filterTasksByOfficePack, type TaskCreateInput } from "./task-workflow-pack";
 
 interface AppMainLayoutLabels {
@@ -231,6 +231,7 @@ export default function AppMainLayout({
 
   const seededPackAgents = useMemo(() => {
     if (officePackKey === "development") return [] as Agent[];
+    if (officePackKey === "video_production") return [] as Agent[];
     if (activePackProfile?.agents?.length) return activePackProfile.agents;
     const drafts = buildOfficePackStarterAgents({
       packKey: officePackKey,
@@ -269,11 +270,16 @@ export default function AppMainLayout({
   const packProfileDepartments =
     officePackKey === "development"
       ? null
+      : officePackKey === "video_production"
+        ? videoProductionDepartmentsFromDatabase(departments)
       : (activePackProfile?.departments ?? generatedOfficePresentation.departments);
-  const packProfileAgents = officePackKey === "development" ? null : (activePackProfile?.agents ?? seededPackAgents);
+  const packProfileAgents = officePackKey === "development" ? null : officePackKey === "video_production"
+    ? videoProductionAgentsFromDatabase(agents)
+    : (activePackProfile?.agents ?? seededPackAgents);
 
   const isHydratedOfficePack = useMemo(() => {
     if (officePackKey === "development") return false;
+    if (officePackKey === "video_production") return true;
     const hydrated = settings.officePackHydratedPacks;
     if (!Array.isArray(hydrated)) return false;
     return hydrated.map((value) => String(value ?? "").trim()).includes(officePackKey);
@@ -290,7 +296,7 @@ export default function AppMainLayout({
     [departments, isHydratedOfficePack, officePackKey, packProfileDepartments],
   );
 
-  const { scopedAgents: officeScopedAgents, mergedAgents: displayAgents } = useMemo(
+  const { scopedAgents: resolvedOfficeScopedAgents, mergedAgents: resolvedDisplayAgents } = useMemo(
     () =>
       resolvePackAgentViews({
         packKey: officePackKey,
@@ -299,6 +305,12 @@ export default function AppMainLayout({
       }),
     [agents, officePackKey, packProfileAgents],
   );
+  const officeScopedAgents = officePackKey === "video_production"
+    ? agents.filter((agent) => agent.workflow_pack_key === "video_production")
+    : resolvedOfficeScopedAgents;
+  const displayAgents = officePackKey === "video_production"
+    ? officeScopedAgents
+    : resolvedDisplayAgents;
 
   const managerDepartments =
     officePackKey === "development"
@@ -309,7 +321,9 @@ export default function AppMainLayout({
 
   const managerAgents =
     officePackKey === "development"
-      ? agents
+      ? agents.filter((agent) => agent.workflow_pack_key !== "video_production")
+      : officePackKey === "video_production"
+        ? videoProductionAgentsFromDatabase(agents)
       : isHydratedOfficePack
         ? officeScopedAgents
         : (activePackProfile?.agents ?? seededPackAgents);
@@ -317,14 +331,18 @@ export default function AppMainLayout({
   const officePresentation = useMemo(() => {
     if (officePackKey === "development") return generatedOfficePresentation;
     return {
-      departments: displayDepartments,
-      agents: officeScopedAgents,
+      departments: officePackKey === "video_production"
+        ? packProfileDepartments ?? []
+        : displayDepartments,
+      agents: officePackKey === "video_production"
+        ? videoProductionAgentsFromDatabase(agents)
+        : officeScopedAgents,
       roomThemes: {
         ...customRoomThemes,
         ...getOfficePackRoomThemes(officePackKey),
       },
     };
-  }, [customRoomThemes, displayDepartments, generatedOfficePresentation, officePackKey, officeScopedAgents]);
+  }, [agents, customRoomThemes, displayDepartments, generatedOfficePresentation, officePackKey, officeScopedAgents, packProfileDepartments]);
 
   const tasksForActivePack = useMemo(() => filterTasksByOfficePack(tasks, officePackKey), [tasks, officePackKey]);
   const handleCreateTaskForActivePack = useCallback(
@@ -494,7 +512,7 @@ export default function AppMainLayout({
             {view === "dashboard" && (
               <Dashboard
                 stats={stats}
-                agents={agents}
+                agents={officePackKey === "video_production" ? videoProductionAgentsFromDatabase(agents) : agents.filter((agent) => agent.workflow_pack_key !== "video_production")}
                 tasks={tasks}
                 companyName={settings.companyName}
                 onPrimaryCtaClick={() => setView("tasks")}

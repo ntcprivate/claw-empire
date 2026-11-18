@@ -12,6 +12,8 @@ import type {
   Task,
   CeoOfficeCall,
   WSEventType,
+  Department,
+  WorkflowPackKey,
 } from "../types";
 import {
   CODEX_THREAD_BINDING_TTL_MS,
@@ -42,6 +44,8 @@ interface UseRealtimeSyncParams {
   codexThreadBindingTsRef: MutableRefObject<Map<string, number>>;
   subAgentStreamTailRef: MutableRefObject<Map<string, string>>;
   setAgents: Dispatch<SetStateAction<Agent[]>>;
+  setDepartments: Dispatch<SetStateAction<Department[]>>;
+  activeWorkflowPack: WorkflowPackKey;
   setMessages: Dispatch<SetStateAction<Message[]>>;
   setUnreadAgentIds: Dispatch<SetStateAction<Set<string>>>;
   setTaskReport: Dispatch<SetStateAction<TaskReportDetail | null>>;
@@ -73,6 +77,8 @@ export function useRealtimeSync({
   codexThreadBindingTsRef,
   subAgentStreamTailRef,
   setAgents,
+  setDepartments,
+  activeWorkflowPack,
   setMessages,
   setUnreadAgentIds,
   setTaskReport,
@@ -84,6 +90,7 @@ export function useRealtimeSync({
   setStreamingMessage,
 }: UseRealtimeSyncParams): void {
   useEffect(() => {
+    let effectActive = true;
     const unsubs = [
       on("task_update", () => {
         scheduleLiveSync(80);
@@ -120,8 +127,14 @@ export function useRealtimeSync({
       on("agent_deleted", () => {
         scheduleLiveSync(60);
       }),
-      on("departments_changed", () => {
+      on("departments_changed", (payload: unknown) => {
         scheduleLiveSync(60);
+        const packKey = (payload as { workflow_pack_key?: unknown } | null)?.workflow_pack_key;
+        if (packKey === "video_production" && activeWorkflowPack === "video_production") {
+          void api.getDepartments({ workflowPackKey: "video_production" }).then((next) => {
+            if (effectActive) setDepartments(next);
+          }).catch(console.error);
+        }
       }),
       on("new_message", (payload: unknown) => {
         const msg = payload as Message;
@@ -460,8 +473,8 @@ export function useRealtimeSync({
         }
       }),
     ];
-    return () => unsubs.forEach((fn) => fn());
-  }, [on, scheduleLiveSync]);
+    return () => { effectActive = false; unsubs.forEach((fn) => fn()); };
+  }, [activeWorkflowPack, on, scheduleLiveSync, setDepartments]);
 
   useEffect(() => {
     let timer: ReturnType<typeof setInterval>;

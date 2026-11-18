@@ -92,7 +92,11 @@ function createHarness(): { db: DatabaseSync; routes: Map<string, RouteHandler> 
     app: app as any,
     db: db as any,
     broadcast: () => {},
-    runInTransaction: (fn: () => void) => fn(),
+    runInTransaction: (fn: () => void) => {
+      db.exec("SAVEPOINT crud_test_transaction");
+      try { fn(); db.exec("RELEASE SAVEPOINT crud_test_transaction"); }
+      catch (error) { db.exec("ROLLBACK TO SAVEPOINT crud_test_transaction"); db.exec("RELEASE SAVEPOINT crud_test_transaction"); throw error; }
+    },
     nowMs: () => Date.now(),
     meetingPresenceUntil: new Map(),
     meetingSeatIndexByAgent: new Map(),
@@ -256,5 +260,69 @@ describe("agent CRUD seed filter", () => {
     } finally {
       db.close();
     }
+  });
+
+  it("DELETE Video Production agent writes trusted grant-removal audit and revokes scoped credentials", () => {
+    const { db, routes } = createHarness();
+    try {
+      db.exec(`
+        ALTER TABLE agents ADD COLUMN workflow_pack_key TEXT;
+        CREATE TABLE tasks(assigned_agent_id TEXT);
+        CREATE TABLE subtasks(assigned_agent_id TEXT);
+        CREATE TABLE meeting_minute_entries(speaker_agent_id TEXT);
+        CREATE TABLE task_report_archives(generated_by_agent_id TEXT);
+        CREATE TABLE project_review_decision_states(planner_agent_id TEXT);
+        CREATE TABLE review_round_decision_states(planner_agent_id TEXT);
+        CREATE TABLE video_production_agent_roles(agent_id TEXT,role_key TEXT);
+        CREATE TABLE video_production_project_grants(project_id TEXT,agent_id TEXT,grant_key TEXT,revoked_at INTEGER);
+        CREATE TABLE video_production_agent_credentials(project_id TEXT,agent_id TEXT,revoked_at INTEGER);
+        CREATE TABLE video_production_events(project_id TEXT,event TEXT,actor_id TEXT,detail_json TEXT,created_at INTEGER);
+        INSERT INTO agents(id,name,role,workflow_pack_key,status) VALUES('video_production-role-director','Rian','senior','video_production','idle');
+        INSERT INTO video_production_agent_roles(agent_id,role_key) VALUES('video_production-role-director','director');
+        INSERT INTO video_production_project_grants(project_id,agent_id,grant_key) VALUES('studio-project','video_production-role-director','member');
+        INSERT INTO video_production_agent_credentials(project_id,agent_id) VALUES('studio-project','video_production-role-director');
+      `);
+      const handler = routes.get("DELETE /api/agents/:id");
+      const res = createFakeResponse();
+      handler?.({ params: { id: "video_production-role-director" } }, res);
+      expect(res.statusCode).toBe(200);
+      expect(db.prepare("SELECT event,actor_id,detail_json FROM video_production_events").get()).toMatchObject({
+        event: "project_agent_removed", actor_id: "ceo_session", detail_json: expect.stringContaining("video_production-role-director"),
+      });
+      expect(db.prepare("SELECT revoked_at FROM video_production_project_grants").get()?.revoked_at).toBeGreaterThan(0);
+      expect(db.prepare("SELECT revoked_at FROM video_production_agent_credentials").get()?.revoked_at).toBeGreaterThan(0);
+      expect(db.prepare("SELECT COUNT(*) AS count FROM agents WHERE id='video_production-role-director'").get()).toEqual({ count: 0 });
+    } finally { db.close(); }
+  });
+
+  it("rolls back Video Production deletion when the permission-removal audit fails", () => {
+    const { db, routes } = createHarness();
+    try {
+      db.exec(`
+        ALTER TABLE agents ADD COLUMN workflow_pack_key TEXT;
+        CREATE TABLE tasks(assigned_agent_id TEXT);
+        CREATE TABLE subtasks(assigned_agent_id TEXT);
+        CREATE TABLE meeting_minute_entries(speaker_agent_id TEXT);
+        CREATE TABLE task_report_archives(generated_by_agent_id TEXT);
+        CREATE TABLE project_review_decision_states(planner_agent_id TEXT);
+        CREATE TABLE review_round_decision_states(planner_agent_id TEXT);
+        CREATE TABLE video_production_agent_roles(agent_id TEXT,role_key TEXT);
+        CREATE TABLE video_production_project_grants(project_id TEXT,agent_id TEXT,grant_key TEXT,revoked_at INTEGER);
+        CREATE TABLE video_production_agent_credentials(project_id TEXT,agent_id TEXT,revoked_at INTEGER);
+        CREATE TABLE video_production_events(project_id TEXT,event TEXT,actor_id TEXT,detail_json TEXT,created_at INTEGER);
+        INSERT INTO agents(id,name,role,workflow_pack_key,status) VALUES('video_production-role-editor','Liam','senior','video_production','idle');
+        INSERT INTO video_production_agent_roles(agent_id,role_key) VALUES('video_production-role-editor','editor');
+        INSERT INTO video_production_project_grants(project_id,agent_id,grant_key) VALUES('studio-project','video_production-role-editor','member');
+        INSERT INTO video_production_agent_credentials(project_id,agent_id) VALUES('studio-project','video_production-role-editor');
+        CREATE TRIGGER reject_studio_removal_audit BEFORE INSERT ON video_production_events BEGIN SELECT RAISE(ABORT,'audit unavailable'); END;
+      `);
+      const handler = routes.get("DELETE /api/agents/:id");
+      const res = createFakeResponse();
+      handler?.({ params: { id: "video_production-role-editor" } }, res);
+      expect(res.statusCode).toBe(500);
+      expect(db.prepare("SELECT COUNT(*) AS count FROM agents WHERE id='video_production-role-editor'").get()).toEqual({ count: 1 });
+      expect(db.prepare("SELECT revoked_at FROM video_production_project_grants").get()?.revoked_at).toBeNull();
+      expect(db.prepare("SELECT revoked_at FROM video_production_agent_credentials").get()?.revoked_at).toBeNull();
+    } finally { db.close(); }
   });
 });

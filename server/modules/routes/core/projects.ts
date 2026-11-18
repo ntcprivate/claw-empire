@@ -6,6 +6,7 @@ import path from "node:path";
 import { getAssignedAgentIdsByProjectIds } from "../shared/project-assignments.ts";
 import { createProjectRouteHelpers } from "./projects/helpers.ts";
 import { DEFAULT_WORKFLOW_PACK_KEY, isWorkflowPackKey } from "../../workflow/packs/definitions.ts";
+import { getVideoProduction, isVideoProductionProject } from "../../workflow/video-production.ts";
 
 type FirstQueryValue = (value: unknown) => string | undefined;
 type NormalizeTextField = (value: unknown) => string | null;
@@ -295,6 +296,15 @@ export function registerProjectRoutes({
     if (!existing) return res.status(404).json({ error: "not_found" });
 
     const body = req.body ?? {};
+    if (
+      isVideoProductionProject(db, id) &&
+      getVideoProduction(db, id) &&
+      (("default_pack_key" in body && body.default_pack_key !== "video_production") ||
+        ("project_path" in body &&
+          normalizeProjectPathInput(body.project_path) !== (existing as { project_path: string }).project_path))
+    ) {
+      return res.status(409).json({ error: "video_production_project_identity_protected" });
+    }
     const updates: string[] = ["updated_at = ?"];
     const params: unknown[] = [nowMs()];
     const createPathIfMissing = body.create_path_if_missing !== false;
@@ -415,6 +425,9 @@ export function registerProjectRoutes({
     const existing = db.prepare("SELECT id FROM projects WHERE id = ?").get(id);
     if (!existing) return res.status(404).json({ error: "not_found" });
 
+    if (isVideoProductionProject(db, id) && getVideoProduction(db, id)) {
+      return res.status(409).json({ error: "video_production_project_archive_not_implemented" });
+    }
     db.prepare("UPDATE tasks SET project_id = NULL WHERE project_id = ?").run(id);
     db.prepare("DELETE FROM projects WHERE id = ?").run(id);
     res.json({ ok: true });

@@ -391,7 +391,7 @@ export function hydrateOfficePackAgentFromSettings(db: DbLike, agentId: string, 
 
   const now = nowMs();
   const found = findOfficePackProfileAgentById(root, normalizedAgentId, now);
-  if (!found) return null;
+  if (!found || found.packKey === "video_production") return null;
 
   const deptId = ensureDepartmentExists(db, found.packKey, found.agent.department_id, found.department, now);
   const includeWorkflowPackKey = hasAgentWorkflowPackColumn(db);
@@ -620,6 +620,9 @@ export function syncOfficePackAgentsForPack(
   const root = asObject(parseJsonSafe(profilesRaw));
   const normalizedPackKey = normalizeText(packKey);
   if (!root || !normalizedPackKey) return { departmentsSynced: 0, agentsSynced: 0 };
+  // Video Production organization is seeded from server-owned role metadata,
+  // never from editable settings profiles or generated starter agents.
+  if (normalizedPackKey === "video_production") return { departmentsSynced: 0, agentsSynced: 0 };
 
   const profile = asObject(root[normalizedPackKey]);
   if (!profile) return { departmentsSynced: 0, agentsSynced: 0 };

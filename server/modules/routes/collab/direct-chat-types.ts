@@ -11,6 +11,7 @@ export interface AgentRow {
   personality: string | null;
   status: string;
   department_id: string | null;
+  workflow_pack_key?: string | null;
   current_task_id: string | null;
   avatar_emoji: string;
   cli_provider: string | null;

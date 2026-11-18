@@ -42,6 +42,19 @@ const SUBTASK_STATUS_ICON: Record<string, string> = {
   blocked: "\uD83D\uDEAB",
 };
 
+function productionIntakeState(task: Task): string | null {
+  if (task.workflow_pack_key !== "video_production" || task.source_task_id || !task.workflow_meta_json) return null;
+  try {
+    const metadata = JSON.parse(task.workflow_meta_json)?.videoProduction;
+    if (!metadata || metadata.stage !== "intake_planning") return null;
+    return ["NEEDS_INFORMATION", "WAITING_FOR_APPROVAL", "CHANGES_REQUESTED", "APPROVED"].includes(metadata.state)
+      ? metadata.state
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function TaskCard({
   task,
   agents,
@@ -78,12 +91,14 @@ export default function TaskCard({
   const assignedLabel = assignedDisplayName || fallbackAssignedName || null;
   const department = departments.find((d) => d.id === task.department_id);
   const typeBadge = getTaskTypeBadge(task.task_type, t);
+  const productionState = productionIntakeState(task);
+  const managedProduction = task.workflow_pack_key === "video_production";
 
-  const canRun = task.status === "planned" || task.status === "inbox";
-  const canStop = task.status === "in_progress";
-  const canPause = task.status === "in_progress" && !!onPauseTask;
-  const canResume = (task.status === "pending" || task.status === "cancelled") && !!onResumeTask;
-  const canDelete = task.status !== "in_progress";
+  const canRun = !managedProduction && (task.status === "planned" || task.status === "inbox");
+  const canStop = !managedProduction && task.status === "in_progress";
+  const canPause = !managedProduction && task.status === "in_progress" && !!onPauseTask;
+  const canResume = !managedProduction && (task.status === "pending" || task.status === "cancelled") && !!onResumeTask;
+  const canDelete = !managedProduction && task.status !== "in_progress";
   const canHideTask = isHideableStatus(task.status);
 
   return (
@@ -117,6 +132,14 @@ export default function TaskCard({
 
       <div className="mb-3 flex flex-wrap items-center gap-1.5">
         <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${typeBadge.color}`}>{typeBadge.label}</span>
+        {productionState && (
+          <span
+            aria-label="Production approval status"
+            className="rounded-full border border-amber-700/60 bg-amber-950/40 px-2 py-0.5 text-xs text-amber-200"
+          >
+            Intake &amp; Planning · {productionState.toLowerCase().replaceAll("_", " ")}
+          </span>
+        )}
         {isHiddenTask && (
           <span className="rounded-full bg-cyan-900/60 px-2 py-0.5 text-xs text-cyan-200">
             🙈 {t({ ko: "숨김", en: "Hidden", ja: "非表示", zh: "隐藏" })}
@@ -132,6 +155,7 @@ export default function TaskCard({
       <div className="mb-3">
         <select
           value={task.status}
+          disabled={managedProduction}
           onChange={(event) => onUpdateTask(task.id, { status: event.target.value as TaskStatus })}
           className="w-full rounded-lg border border-slate-600 bg-slate-700 px-2 py-1 text-xs text-white outline-none transition focus:border-blue-500"
         >
@@ -164,29 +188,32 @@ export default function TaskCard({
       <div
         className={`mb-3 rounded-lg transition-all ${agentWarning ? "ring-2 ring-red-500 animate-[shake_0.4s_ease-in-out]" : ""}`}
       >
-        <AgentSelect
-          agents={agents}
-          departments={departments}
-          value={task.assigned_agent_id ?? ""}
-          placeholder={
-            assignedAgent || !assignedLabel
-              ? undefined
-              : t({
-                  ko: `배정됨(숨김): ${assignedLabel}`,
-                  en: `Assigned (hidden): ${assignedLabel}`,
-                  ja: `割り当て済み(非表示): ${assignedLabel}`,
-                  zh: `已分配（隐藏）: ${assignedLabel}`,
-                })
-          }
-          onChange={(agentId) => {
-            setAgentWarning(false);
-            if (agentId) {
-              onAssignTask(task.id, agentId);
-            } else {
-              onUpdateTask(task.id, { assigned_agent_id: null });
+        {!managedProduction && (
+          <AgentSelect
+            agents={agents}
+            departments={departments}
+            value={task.assigned_agent_id ?? ""}
+            placeholder={
+              assignedAgent || !assignedLabel
+                ? undefined
+                : t({
+                    ko: `배정됨(숨김): ${assignedLabel}`,
+                    en: `Assigned (hidden): ${assignedLabel}`,
+                    ja: `割り当て済み(非表示): ${assignedLabel}`,
+                    zh: `已分配（隐藏）: ${assignedLabel}`,
+                  })
             }
-          }}
-        />
+            onChange={(agentId) => {
+              setAgentWarning(false);
+              if (agentId) {
+                onAssignTask(task.id, agentId);
+              } else {
+                onUpdateTask(task.id, { assigned_agent_id: null });
+              }
+            }}
+          />
+        )}
+        {managedProduction && <p className="text-xs text-slate-400">Manage the brief and CEO approval in Projects.</p>}
         {agentWarning && (
           <p className="mt-1 text-xs font-medium text-red-400 animate-[shake_0.4s_ease-in-out]">
             {t({

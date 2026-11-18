@@ -24,6 +24,7 @@ const VALID_WORKFLOW_PACK_KEYS = new Set<WorkflowPackKey>([
   "novel",
   "report",
   "video_preprod",
+  "video_production",
   "web_research_report",
   "roleplay",
 ]);

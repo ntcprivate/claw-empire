@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isManagedVideoProductionTask } from "../video-production.ts";
 import { resolveWorkflowPackKeyForTask } from "../packs/task-pack-resolver.ts";
 
 type CreateReportWorkflowToolsDeps = Record<string, any>;
@@ -239,6 +240,7 @@ export function createReportWorkflowTools(deps: CreateReportWorkflowToolsDeps) {
     project_path: string | null;
     assigned_agent_id: string | null;
   }): boolean {
+    if (isManagedVideoProductionTask(db, task.id)) return false;
     const lang = resolveLang(task.description ?? task.title);
     const designAgent = pickDesignCheckpointAgent();
     if (!designAgent) {

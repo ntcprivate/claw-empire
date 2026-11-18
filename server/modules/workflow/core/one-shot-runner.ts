@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { AgentRow, OneShotRunOptions, OneShotRunResult } from "./conversation-types.ts";
+import { CLI_WORKER_RUNTIME_MODE } from "../../../config/runtime.ts";
 
 type CreateOneShotRunnerDeps = {
   logsDir: string;
@@ -192,6 +193,9 @@ export function createOneShotRunner(deps: CreateOneShotRunnerDeps) {
         }
         if (!rawOutput.trim() && fs.existsSync(logPath)) rawOutput = fs.readFileSync(logPath, "utf8");
       } else {
+        if (CLI_WORKER_RUNTIME_MODE === "container") {
+          throw new Error(`worker_provider_not_configured:${provider}`);
+        }
         const modelConfig = getProviderModelConfig();
         const model = agent.cli_model || modelConfig[provider]?.model || undefined;
         const reasoningLevel =

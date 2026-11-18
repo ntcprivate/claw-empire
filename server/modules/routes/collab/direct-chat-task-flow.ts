@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Lang } from "../../../types/lang.ts";
 import { resolveWorkflowPackKeyForTask } from "../../workflow/packs/task-pack-resolver.ts";
+import { isVideoProductionProject } from "../../workflow/video-production.ts";
 import { isWorkflowPackKey } from "../../workflow/packs/definitions.ts";
 import type { DelegationOptions } from "./project-resolution.ts";
 import type { AgentRow, DirectChatDeps } from "./direct-chat-types.ts";
@@ -60,6 +61,7 @@ export function createDirectTaskFlow(deps: TaskFlowDeps) {
       explicitPackKey,
       projectId: selectedProject.id,
     });
+    if (workflowPackKey === "video_production" || isVideoProductionProject(deps.db, selectedProject.id)) return;
     const projectCoreGoal = selectedProject.coreGoal || "";
     const projectContextHint = deps.normalizeTextField(options.projectContext) || projectCoreGoal;
     const detectedPath =

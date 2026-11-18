@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isManagedVideoProductionTask } from "../../../workflow/video-production.ts";
 import type { SQLInputValue } from "node:sqlite";
 import type { RuntimeContext } from "../../../../types/runtime-context.ts";
 import type { AgentRow } from "../../shared/types.ts";
@@ -61,6 +62,9 @@ export function registerTaskSubtaskRoutes(deps: TaskSubtaskRouteDeps): void {
 
   app.post("/api/tasks/:id/subtasks", (req, res) => {
     const taskId = String(req.params.id);
+    if (isManagedVideoProductionTask(db, taskId)) {
+      return res.status(409).json({ error: "video_production_managed_task" });
+    }
     const task = db.prepare("SELECT id FROM tasks WHERE id = ?").get(taskId);
     if (!task) return res.status(404).json({ error: "task_not_found" });
 
@@ -104,6 +108,9 @@ export function registerTaskSubtaskRoutes(deps: TaskSubtaskRouteDeps): void {
     const id = String(req.params.id);
     const existing = db.prepare("SELECT * FROM subtasks WHERE id = ?").get(id) as Record<string, unknown> | undefined;
     if (!existing) return res.status(404).json({ error: "not_found" });
+    if (typeof existing.task_id === "string" && isManagedVideoProductionTask(db, existing.task_id)) {
+      return res.status(409).json({ error: "video_production_managed_task" });
+    }
 
     const body = req.body ?? {};
     const allowedFields = [
@@ -142,6 +149,9 @@ export function registerTaskSubtaskRoutes(deps: TaskSubtaskRouteDeps): void {
 
   app.post("/api/tasks/:id/assign", (req, res) => {
     const id = String(req.params.id);
+    if (isManagedVideoProductionTask(db, id)) {
+      return res.status(409).json({ error: "video_production_managed_task" });
+    }
     const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as
       | {
           id: string;

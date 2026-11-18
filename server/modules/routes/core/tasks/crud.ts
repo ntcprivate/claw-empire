@@ -7,6 +7,18 @@ import type { RuntimeContext } from "../../../../types/runtime-context.ts";
 import type { MeetingMinuteEntryRow, MeetingMinutesRow } from "../../shared/types.ts";
 import { isWorkflowPackKey } from "../../../workflow/packs/definitions.ts";
 import { resolveWorkflowPackKeyForTask } from "../../../workflow/packs/task-pack-resolver.ts";
+import { isManagedVideoProductionTask, isVideoProductionProject } from "../../../workflow/video-production.ts";
+
+function hasProductionMetadata(value: unknown): boolean {
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return false;
+    }
+  }
+  return typeof value === "object" && value !== null && "videoProduction" in value;
+}
 
 export type TaskCrudRouteDeps = Pick<
   RuntimeContext,
@@ -224,6 +236,22 @@ export function registerTaskCrudRoutes(deps: TaskCrudRouteDeps): void {
       }
     }
 
+    const workflowPackKey = resolveWorkflowPackKeyForTask({
+      db: db as any,
+      explicitPackKey: (body as any).workflow_pack_key,
+      projectId: resolvedProjectId,
+    });
+    if (
+      workflowPackKey === "video_production" ||
+      isVideoProductionProject(db, resolvedProjectId) ||
+      hasProductionMetadata((body as any).workflow_meta_json)
+    ) {
+      return res.status(409).json({
+        error: "video_production_managed_task",
+        message: "Create production tasks through the production workflow.",
+      });
+    }
+
     db.prepare(
       `
     INSERT INTO tasks (
@@ -243,11 +271,7 @@ export function registerTaskCrudRoutes(deps: TaskCrudRouteDeps): void {
       (body as any).status ?? "inbox",
       (body as any).priority ?? 0,
       (body as any).task_type ?? "general",
-      resolveWorkflowPackKeyForTask({
-        db: db as any,
-        explicitPackKey: (body as any).workflow_pack_key,
-        projectId: resolvedProjectId,
-      }),
+      workflowPackKey,
       typeof (body as any).workflow_meta_json === "string"
         ? (body as any).workflow_meta_json
         : (body as any).workflow_meta_json
@@ -406,6 +430,16 @@ export function registerTaskCrudRoutes(deps: TaskCrudRouteDeps): void {
     if (!existing) return res.status(404).json({ error: "not_found" });
 
     const body = { ...(req.body ?? {}) } as Record<string, unknown>;
+    if (
+      (isManagedVideoProductionTask(db, id) && Object.keys(body).some((key) => key !== "hidden")) ||
+      normalizeTextField(body.workflow_pack_key) === "video_production" ||
+      hasProductionMetadata(body.workflow_meta_json) ||
+      isVideoProductionProject(db, normalizeTextField(body.project_id))
+    ) {
+      return res
+        .status(409)
+        .json({ error: "video_production_managed_task", message: "Use production workflow controls." });
+    }
     if ("workflow_pack_key" in body) {
       const workflowPackKey = normalizeTextField(body.workflow_pack_key);
       if (!workflowPackKey || !isWorkflowPackKey(workflowPackKey)) {
@@ -533,6 +567,11 @@ export function registerTaskCrudRoutes(deps: TaskCrudRouteDeps): void {
 
   app.delete("/api/tasks/:id", (req, res) => {
     const id = String(req.params.id);
+    if (isManagedVideoProductionTask(db, id)) {
+      return res
+        .status(409)
+        .json({ error: "video_production_managed_task", message: "Use production workflow controls." });
+    }
     const existing = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as
       | {
           assigned_agent_id: string | null;

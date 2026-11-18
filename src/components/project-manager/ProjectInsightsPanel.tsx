@@ -1,11 +1,13 @@
 import type { ProjectDecisionEventItem, ProjectReportHistoryItem, ProjectTaskHistoryItem } from "../../api";
-import type { Project } from "../../types";
+import type { Agent, Project } from "../../types";
+import VideoProductionPanel from "./VideoProductionPanel";
 import type { GroupedProjectTaskCard, ProjectI18nTranslate } from "./types";
 import { fmtTime } from "./utils";
 
 interface ProjectInsightsPanelProps {
   t: ProjectI18nTranslate;
   selectedProject: Project | null;
+  agents?: Agent[];
   loadingDetail: boolean;
   isCreating: boolean;
   groupedTaskCards: GroupedProjectTaskCard[];
@@ -18,6 +20,7 @@ interface ProjectInsightsPanelProps {
 export default function ProjectInsightsPanel({
   t,
   selectedProject,
+  agents,
   loadingDetail,
   isCreating,
   groupedTaskCards,
@@ -28,6 +31,9 @@ export default function ProjectInsightsPanel({
 }: ProjectInsightsPanelProps) {
   return (
     <div className="min-w-0 space-y-4">
+      {selectedProject?.default_pack_key === "video_production" && !isCreating && (
+        <VideoProductionPanel key={selectedProject.id} projectId={selectedProject.id} agents={agents} />
+      )}
       <div className="min-w-0 rounded-xl border border-slate-700 bg-slate-800/40 p-4">
         <div className="flex items-center justify-between">
           <h4 className="text-sm font-semibold text-white">

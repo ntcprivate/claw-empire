@@ -102,6 +102,7 @@ export const WORKFLOW_PACK_KEYS = [
   "novel",
   "report",
   "video_preprod",
+  "video_production",
   "web_research_report",
   "roleplay",
 ] as const;

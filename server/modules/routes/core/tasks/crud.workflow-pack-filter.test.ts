@@ -132,6 +132,73 @@ function createTaskCrudHarness(): { db: DatabaseSync; routes: Map<string, RouteH
   return { db, routes };
 }
 
+describe("managed video production task policy", () => {
+  it.each([
+    { workflow_pack_key: "video_production" },
+    { workflow_pack_key: "development", workflow_meta_json: { videoProduction: {} } },
+    { workflow_pack_key: "development", project_id: "studio" },
+  ])("rejects generic creation into production: %j", (body) => {
+    const { db, routes } = createTaskCrudHarness();
+    try {
+      db.prepare(
+        "INSERT INTO projects(id, project_path, default_pack_key) VALUES('studio','/studio','video_production')",
+      ).run();
+      const res = createFakeResponse();
+      routes.get("POST /api/tasks")!({ body: { title: "Bypass", ...body } }, res);
+      expect(res.statusCode).toBe(409);
+      expect(db.prepare("SELECT count(*) AS count FROM tasks").get()).toEqual({ count: 0 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it.each([
+    { workflow_pack_key: "development", workflow_meta_json: null },
+    { status: "done" },
+    { assigned_agent_id: "other" },
+    { project_id: null },
+  ])("rejects generic state/identity mutation: %j", (body) => {
+    const { db, routes } = createTaskCrudHarness();
+    try {
+      db.prepare(
+        "INSERT INTO tasks(id,title,status,priority,task_type,workflow_pack_key,created_at,updated_at) VALUES('root','Plan','inbox',0,'documentation','video_production',1,1)",
+      ).run();
+      const res = createFakeResponse();
+      routes.get("PATCH /api/tasks/:id")!({ params: { id: "root" }, body }, res);
+      expect(res.statusCode).toBe(409);
+      expect(db.prepare("SELECT status,workflow_pack_key,assigned_agent_id FROM tasks WHERE id='root'").get()).toEqual({
+        status: "inbox",
+        workflow_pack_key: "video_production",
+        assigned_agent_id: null,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects production conversion and deletion through generic routes", () => {
+    const { db, routes } = createTaskCrudHarness();
+    try {
+      db.prepare(
+        "INSERT INTO tasks(id,title,status,priority,task_type,workflow_pack_key,created_at,updated_at) VALUES('task','Plan','inbox',0,'general','development',1,1)",
+      ).run();
+      const convert = createFakeResponse();
+      routes.get("PATCH /api/tasks/:id")!(
+        { params: { id: "task" }, body: { workflow_pack_key: " video_production " } },
+        convert,
+      );
+      expect(convert.statusCode).toBe(409);
+      db.prepare("UPDATE tasks SET workflow_pack_key='video_production' WHERE id='task'").run();
+      const remove = createFakeResponse();
+      routes.get("DELETE /api/tasks/:id")!({ params: { id: "task" } }, remove);
+      expect(remove.statusCode).toBe(409);
+      expect(db.prepare("SELECT count(*) AS count FROM tasks").get()).toEqual({ count: 1 });
+    } finally {
+      db.close();
+    }
+  });
+});
+
 describe("task CRUD workflow pack filter", () => {
   it("GET /api/tasks는 workflow_pack_key 필터를 적용한다", () => {
     const { db, routes } = createTaskCrudHarness();

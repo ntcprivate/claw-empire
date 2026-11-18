@@ -1,6 +1,9 @@
 import type { SQLInputValue } from "node:sqlite";
 import type { RuntimeContext } from "../../../../types/runtime-context.ts";
 import type { AgentRow, StoredMessage } from "../../shared/types.ts";
+import { trySaveVideoProductionBriefReply } from "./video-production-conversation.ts";
+import { publishVideoProductionUpdate, requireVideoProductionCeo } from "../../core/video-production.ts";
+import { isVideoProductionProject } from "../../../workflow/video-production.ts";
 
 type ChatMessageRouteCtx = Pick<RuntimeContext, "app" | "db" | "broadcast">;
 
@@ -112,6 +115,12 @@ export function registerChatMessageRoutes(ctx: ChatMessageRouteCtx, deps: ChatMe
     const projectPath = normalizeTextField(body.project_path);
     const projectContext = normalizeTextField(body.project_context);
 
+    // A structured brief reply mutates the approved plan. Guard it before the
+    // message is persisted; sender_type/sender_id in JSON are not authority.
+    if (/^\s*\[VIDEO_BRIEF\]/i.test(content) && isVideoProductionProject(db, projectId)) {
+      if (!requireVideoProductionCeo(req, res)) return;
+    }
+
     let storedMessage: StoredMessage;
     let created: boolean;
     try {
@@ -200,6 +209,17 @@ export function registerChatMessageRoutes(ctx: ChatMessageRouteCtx, deps: ChatMe
 
     // Schedule agent auto-reply when CEO messages an agent
     if (senderType === "ceo" && receiverType === "agent" && receiverId) {
+      if (
+        trySaveVideoProductionBriefReply(db, res, {
+          projectId,
+          agentId: receiverId,
+          content,
+          messageId: msg.id,
+          onSaved: (production) => publishVideoProductionUpdate({ db, broadcast }, production),
+        })
+      ) {
+        return;
+      }
       if (messageType === "report") {
         const handled = handleReportRequest(receiverId, content);
         if (!handled) {

@@ -8,6 +8,8 @@ import { notifyTaskStatus } from "../gateway/client.ts";
 import { startDiscordReceiver } from "../messenger/discord-receiver.ts";
 import { startTelegramReceiver } from "../messenger/telegram-receiver.ts";
 import { registerGracefulShutdownHandlers } from "./lifecycle/register-graceful-shutdown.ts";
+import { isManagedVideoProductionTask } from "./workflow/video-production.ts";
+import { reconcileVideoProductionAttemptsAfterRestart } from "./workflow/video-production-execution.ts";
 
 export function startLifecycle(ctx: RuntimeContext): void {
   const {
@@ -233,6 +235,19 @@ export function startLifecycle(ctx: RuntimeContext): void {
 
     const now = nowMs();
     for (const task of inProgressTasks) {
+      if (isManagedVideoProductionTask(db, task.id)) {
+        const active = activeProcesses.get(task.id);
+        if (active) {
+          const pid = typeof active.pid === "number" ? active.pid : null;
+          if (pid === null || pid < 0 || isPidAlive(pid)) continue;
+          activeProcesses.delete(task.id);
+        }
+        const marked = db.prepare(
+          "UPDATE video_production_attempts SET state='RECONCILIATION_REQUIRED',updated_at=? WHERE task_id=? AND state IN ('PREPARED','LAUNCHING','RUNNING')",
+        ).run(now, task.id);
+        if (marked.changes) appendTaskLog(task.id, "system", `Production recovery (${reason}): attempt retained for worker/container reconciliation; no retry or release was attempted.`);
+        continue;
+      }
       const active = activeProcesses.get(task.id);
       if (active) {
         const pid = typeof active.pid === "number" ? active.pid : null;
@@ -351,6 +366,14 @@ export function startLifecycle(ctx: RuntimeContext): void {
 
   function recoverInterruptedWorkflowOnStartup(): void {
     pruneDuplicateReviewMeetings();
+    try {
+      const attempts = reconcileVideoProductionAttemptsAfterRestart(db);
+      for (const attempt of attempts) {
+        appendTaskLog(attempt.taskId, "system", `Production restart reconciliation: ${attempt.state} (${attempt.attemptId}); no duplicate launch was attempted.`);
+      }
+    } catch (err) {
+      console.error("[Claw-Empire] production restart reconciliation failed:", err);
+    }
     try {
       reconcileCrossDeptSubtasks();
     } catch (err) {
@@ -534,6 +557,7 @@ export function startLifecycle(ctx: RuntimeContext): void {
     killPidTree,
     rollbackTaskWorktree,
     db,
+    appendTaskLog,
     nowMs,
     endTaskExecutionSession,
     wsClients,

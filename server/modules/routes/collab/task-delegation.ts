@@ -6,6 +6,7 @@ import type { Lang } from "../../../types/lang.ts";
 import type { L10n } from "./language-policy.ts";
 import type { RuntimeContext } from "../../../types/runtime-context.ts";
 import { resolveWorkflowPackKeyForTask } from "../../workflow/packs/task-pack-resolver.ts";
+import { isVideoProductionProject } from "../../workflow/video-production.ts";
 import { isWorkflowPackKey } from "../../workflow/packs/definitions.ts";
 import { resolveConstrainedAgentScopeForTask } from "../core/tasks/execution-run-auto-assign.ts";
 import {
@@ -145,6 +146,10 @@ export function createTaskDelegationHandler(deps: TaskDelegationDeps) {
         explicitPackKey,
         projectId: selectedProject.id,
       });
+      if (workflowPackKey === "video_production" || isVideoProductionProject(db, selectedProject.id)) {
+        notifyCeo("Video production tasks require the production planning and approval workflow.");
+        return;
+      }
       const projectCandidateAgentIds = resolveConstrainedAgentScopeForTask(db as any, {
         workflow_pack_key: workflowPackKey,
         department_id: leaderDeptId,

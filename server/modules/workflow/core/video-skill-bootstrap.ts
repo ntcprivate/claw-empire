@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { CLI_WORKER_RUNTIME_MODE } from "../../../config/runtime.ts";
 
 type DbLike = {
   prepare: (sql: string) => {
@@ -152,6 +153,9 @@ export type EnsureRemotionSkillResult =
   | { state: "failed"; error: string };
 
 export function ensureVideoPreprodRemotionBestPracticesSkill(args: EnsureRemotionSkillArgs): EnsureRemotionSkillResult {
+  // This installer runs an external package command on the backend host. Secure
+  // worker mode keeps it closed until the package is available in the worker image.
+  if (CLI_WORKER_RUNTIME_MODE === "container") return { state: "skipped", reason: "container_worker_registry_only" };
   const { db, nowMs, workflowPackKey, provider, taskId, appendTaskLog } = args;
   const log = (kind: string, message: string) => {
     if (!taskId || !appendTaskLog) return;

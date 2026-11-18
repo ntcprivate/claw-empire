@@ -39,12 +39,13 @@ import { createSecurityAuditTools } from "./modules/bootstrap/security-audit.ts"
 import { applyBaseSchema } from "./modules/bootstrap/schema/base-schema.ts";
 import { initializeOAuthRuntime } from "./modules/bootstrap/schema/oauth-runtime.ts";
 import { applyTaskSchemaMigrations } from "./modules/bootstrap/schema/task-schema-migrations.ts";
+import { ensureVideoProductionSchema } from "./modules/bootstrap/schema/video-production-schema.ts";
 import { applyDefaultSeeds } from "./modules/bootstrap/schema/seeds.ts";
+import { resolveVideoProductionActor } from "./modules/workflow/video-production-rbac.ts";
 
 export type { TaskCreationAuditInput } from "./modules/bootstrap/security-audit.ts";
 
 const app = express();
-installSecurityMiddleware(app);
 
 const { dbPath, db, logsDir } = initializeDatabaseRuntime();
 const distDir = DIST_DIR;
@@ -56,7 +57,11 @@ const readSettingString = createReadSettingString(db);
 applyBaseSchema(db);
 const oauthRuntime = initializeOAuthRuntime({ db, nowMs, runInTransaction });
 applyTaskSchemaMigrations(db);
+ensureVideoProductionSchema(db);
 applyDefaultSeeds(db);
+installSecurityMiddleware(app, {
+  resolveVideoProductionAgent: (token, projectId, action) => resolveVideoProductionActor(db, token, projectId, action),
+});
 
 const messageIdempotency = createMessageIdempotencyTools({
   db,

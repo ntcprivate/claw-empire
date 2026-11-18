@@ -123,6 +123,15 @@ const DEPARTMENT_PERSON_NAME_POOL: Partial<Record<string, Localized[]>> = {
 };
 
 const PACK_SEED_PROFILE: Partial<Record<WorkflowPackKey, SeedProfile>> = {
+  video_production: {
+    nameOffset: 3,
+    tone: {
+      ko: "승인된 제작 계획에 따라 순차적으로 조율합니다.",
+      en: "Coordinates a sequential production plan and waits for CEO approval before production.",
+      ja: "制作計画を調整し、制作前にCEO承認を待ちます。",
+      zh: "协调顺序制作计划，并在制作前等待CEO批准。",
+    },
+  },
   report: {
     nameOffset: 0,
     tone: {
@@ -171,6 +180,23 @@ const PACK_SEED_PROFILE: Partial<Record<WorkflowPackKey, SeedProfile>> = {
 };
 
 const PACK_PRESETS: Record<WorkflowPackKey, PackPreset> = {
+  video_production: {
+    key: "video_production",
+    slug: "VPD",
+    label: { ko: "영상 제작", en: "Video Production", ja: "映像制作", zh: "视频制作" },
+    summary: {
+      ko: "CEO 승인이 필요한 순차 제작 계획",
+      en: "Sequential video planning with CEO approval",
+      ja: "CEO承認付きの順次制作計画",
+      zh: "需要CEO批准的顺序制作计划",
+    },
+    roomThemes: DEV_THEMES,
+    departments: {},
+    staff: {
+      nonLeaderDeptCycle: ["planning", "design", "operations", "dev", "qa"],
+      planningLeadDeptIds: ["operations"],
+    },
+  },
   development: {
     key: "development",
     slug: "DEV",

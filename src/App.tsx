@@ -41,7 +41,7 @@ import { useUpdateStatusPolling } from "./app/useUpdateStatusPolling";
 import { useAppViewEffects } from "./app/useAppViewEffects";
 import { useAppBootstrapData } from "./app/useAppBootstrapData";
 import { useLiveSyncScheduler } from "./app/useLiveSyncScheduler";
-import { resolvePackAgentViews, resolvePackDepartmentsForDisplay } from "./app/office-pack-display";
+import { resolvePackAgentViews, resolvePackDepartmentsForDisplay, videoProductionAgentsFromDatabase, videoProductionDepartmentsFromDatabase } from "./app/office-pack-display";
 import {
   buildOfficePackPresentation,
   buildOfficePackStarterAgents,
@@ -327,6 +327,8 @@ export default function App() {
     setSubtasks,
     setSubAgents,
     setStreamingMessage,
+    setDepartments,
+    activeWorkflowPack: normalizeOfficeWorkflowPack(settings.officeWorkflowPack ?? "development"),
   });
 
   const actions = useAppActions({
@@ -367,14 +369,16 @@ export default function App() {
     activePackKey === "development" ? null : (settings.officePackProfiles?.[activePackKey] ?? null);
   const overlayDepartments = useMemo(
     () =>
-      resolvePackDepartmentsForDisplay({
-        packKey: activePackKey,
-        globalDepartments: departments,
-        packDepartments: activePackProfile?.departments ?? null,
-      }),
+      activePackKey === "video_production"
+        ? videoProductionDepartmentsFromDatabase(departments)
+        : resolvePackDepartmentsForDisplay({
+            packKey: activePackKey,
+            globalDepartments: departments,
+            packDepartments: activePackProfile?.departments ?? null,
+          }),
     [activePackKey, activePackProfile?.departments, departments],
   );
-  const { mergedAgents: overlayAgents } = useMemo(
+  const { mergedAgents: resolvedOverlayAgents } = useMemo(
     () =>
       resolvePackAgentViews({
         packKey: activePackKey,
@@ -383,6 +387,9 @@ export default function App() {
       }),
     [activePackKey, activePackProfile?.agents, agents],
   );
+  const overlayAgents = activePackKey === "video_production"
+    ? videoProductionAgentsFromDatabase(agents)
+    : resolvedOverlayAgents;
 
   if (loading) {
     return (

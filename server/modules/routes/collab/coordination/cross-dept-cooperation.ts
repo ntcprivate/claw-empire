@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isManagedVideoProductionTask } from "../../../workflow/video-production.ts";
 import { randomUUID } from "node:crypto";
 import type { Lang } from "../../../../types/lang.ts";
 import { getDepartmentPromptForPack } from "../../../workflow/packs/department-scope.ts";
@@ -102,6 +103,7 @@ export function createCrossDeptCooperationTools(deps: CrossDeptCooperationDeps) 
   }
 
   function recoverCrossDeptQueueAfterMissingCallback(completedChildTaskId: string): void {
+    if (isManagedVideoProductionTask(db, completedChildTaskId)) return;
     const child = db.prepare("SELECT source_task_id FROM tasks WHERE id = ?").get(completedChildTaskId) as
       | { source_task_id: string | null }
       | undefined;
@@ -246,6 +248,7 @@ export function createCrossDeptCooperationTools(deps: CrossDeptCooperationDeps) 
     ctx: CrossDeptContext,
     onAllDone?: () => void,
   ): void {
+    if (isManagedVideoProductionTask(db, ctx.taskId)) return;
     if (index >= deptIds.length) {
       onAllDone?.();
       return;
@@ -352,6 +355,7 @@ export function createCrossDeptCooperationTools(deps: CrossDeptCooperationDeps) 
     // Cross-department leader acknowledges AND creates a real task
     const crossAckDelay = 1500 + Math.random() * 1000;
     setTimeout(() => {
+      if (isManagedVideoProductionTask(db, taskId)) return;
       const crossSubAtRun = manualScoped
         ? findBestSubordinate(crossDeptId, crossLeader.id, projectCandidateAgentIds)
         : findBestSubordinate(crossDeptId, crossLeader.id);

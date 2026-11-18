@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import type { DatabaseSync } from "node:sqlite";
 import type { WebSocket as WsSocket, WebSocketServer } from "ws";
+import { isManagedVideoProductionTask } from "../workflow/video-production.ts";
 
 interface RegisterGracefulShutdownHandlersOptions {
   activeProcesses: Map<string, ChildProcess>;
@@ -8,6 +9,7 @@ interface RegisterGracefulShutdownHandlersOptions {
   killPidTree: (pid: number) => void;
   rollbackTaskWorktree: (taskId: string, reason: string) => void;
   db: DatabaseSync;
+  appendTaskLog?: (taskId: string, kind: string, message: string) => void;
   nowMs: () => number;
   endTaskExecutionSession: (taskId: string, reason: string) => void;
   wsClients: Set<WsSocket>;
@@ -22,6 +24,7 @@ export function registerGracefulShutdownHandlers({
   killPidTree,
   rollbackTaskWorktree,
   db,
+  appendTaskLog,
   nowMs,
   endTaskExecutionSession,
   wsClients,
@@ -39,6 +42,14 @@ export function registerGracefulShutdownHandlers({
     }
 
     for (const [taskId, child] of activeProcesses) {
+      if (isManagedVideoProductionTask(db as any, taskId)) {
+        db.prepare(
+          "UPDATE video_production_attempts SET state='RECONCILIATION_REQUIRED',updated_at=? WHERE task_id=? AND state IN ('PREPARED','LAUNCHING','RUNNING')",
+        ).run(nowMs(), taskId);
+        appendTaskLog?.(taskId, "system", "Production shutdown: worker identity retained for reconciliation; no broad process kill or reservation release was performed.");
+        activeProcesses.delete(taskId);
+        continue;
+      }
       console.log(`[Claw-Empire] Stopping process for task ${taskId} (pid: ${child.pid})`);
       stopRequestedTasks.add(taskId);
       if (child.pid) {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { isManagedVideoProductionTask } from "../../workflow/video-production.ts";
 
 import type { Lang } from "../../../types/lang.ts";
 import { resolveWorkflowPackKeyForTask } from "../../workflow/packs/task-pack-resolver.ts";
@@ -203,6 +204,10 @@ export function createSubtaskDelegationBatch(deps: BatchDeps) {
     parentTask: ParentTaskRow,
     onBatchDone?: () => void,
   ): void {
+    if (isManagedVideoProductionTask(db, parentTask.id)) {
+      appendTaskLog(parentTask.id, "system", "Production workflow blocks generic subtask delegation.");
+      return;
+    }
     const lang = resolveLang(parentTask.description ?? parentTask.title);
     if (subtasks.length === 0) {
       onBatchDone?.();
@@ -320,6 +325,7 @@ export function createSubtaskDelegationBatch(deps: BatchDeps) {
 
     const ackDelay = 1500 + Math.random() * 1000;
     setTimeout(() => {
+      if (isManagedVideoProductionTask(db, parentTask.id)) return;
       const latestParent = db.prepare("SELECT status FROM tasks WHERE id = ?").get(parentTask.id) as
         | { status?: string }
         | undefined;

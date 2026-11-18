@@ -93,6 +93,7 @@ export function registerOpsSettingsStatsRoutes(ctx: RuntimeContext): void {
   const maybeHydratePackOnFirstSelection = (selectedPackRaw: unknown, profilesOverride?: unknown): void => {
     const selectedPack = normalizePackKey(selectedPackRaw);
     if (!selectedPack || selectedPack === "development") return;
+    if (selectedPack === "video_production") return;
 
     const hydratedPacks = readHydratedPackSet();
     if (hydratedPacks.has(selectedPack)) {

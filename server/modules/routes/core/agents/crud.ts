@@ -419,8 +419,25 @@ export function registerAgentCrudRoutes(ctx: RuntimeContext): void {
       const existing = db.prepare("SELECT * FROM agents WHERE id = ?").get(id) as Record<string, unknown> | undefined;
       if (!existing) return res.status(404).json({ error: "not_found" });
       if (existing.status === "working") return res.status(400).json({ error: "cannot_delete_working_agent" });
+      const rbacTables = ["video_production_agent_roles", "video_production_project_grants", "video_production_agent_credentials", "video_production_events"];
+      const availableRbacTables = rbacTables.filter((table) => db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table));
+      if (availableRbacTables.length > 0 && availableRbacTables.length !== rbacTables.length) throw new Error("video_production_rbac_schema_incomplete");
 
       runInTransaction(() => {
+        if (availableRbacTables.length === rbacTables.length) {
+          const role = db.prepare("SELECT 1 AS configured FROM video_production_agent_roles WHERE agent_id=?").get(id);
+          if (role || existing.workflow_pack_key === "video_production") {
+            const videoProductionGrants = db.prepare(`SELECT project_id,grant_key FROM video_production_project_grants
+              WHERE agent_id=? AND revoked_at IS NULL`).all(id) as Array<{ project_id: string; grant_key: string }>;
+            for (const grant of videoProductionGrants) {
+              const revokedAt = Date.now();
+              db.prepare("UPDATE video_production_project_grants SET revoked_at=? WHERE project_id=? AND agent_id=? AND revoked_at IS NULL").run(revokedAt, grant.project_id, id);
+              db.prepare("UPDATE video_production_agent_credentials SET revoked_at=? WHERE project_id=? AND agent_id=? AND revoked_at IS NULL").run(revokedAt, grant.project_id, id);
+              db.prepare("INSERT INTO video_production_events(project_id,event,actor_id,detail_json,created_at) VALUES(?,'project_agent_removed','ceo_session',?,?)")
+                .run(grant.project_id, JSON.stringify({ agentId: id, grantKey: grant.grant_key, reason: "agent_deleted" }), revokedAt);
+            }
+          }
+        }
         db.prepare("UPDATE tasks SET assigned_agent_id = NULL WHERE assigned_agent_id = ?").run(id);
         db.prepare("UPDATE subtasks SET assigned_agent_id = NULL WHERE assigned_agent_id = ?").run(id);
         db.prepare("UPDATE meeting_minute_entries SET speaker_agent_id = NULL WHERE speaker_agent_id = ?").run(id);

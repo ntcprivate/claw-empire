@@ -51,6 +51,13 @@ export const PORT = Number(process.env.PORT ?? 8790);
 export const HOST = process.env.HOST ?? "127.0.0.1";
 export const OAUTH_BASE_HOST = HOST === "0.0.0.0" || HOST === "::" ? "127.0.0.1" : HOST;
 export const SESSION_COOKIE_NAME = "claw_session";
+// CLI workers must never receive this credential. Container mode is an explicit
+// deployment choice; readiness is verified by the worker runtime, not this value.
+export const CLI_WORKER_RUNTIME_MODE = process.env.CLI_WORKER_RUNTIME_MODE === "container" ? "container" : "host";
+export const CLI_WORKER_CONTAINER_IMAGE = (process.env.CLI_WORKER_CONTAINER_IMAGE ?? "").trim();
+// Credential issuance remains off until an operator explicitly enables it
+// after deployment isolation has been reviewed.
+export const VIDEO_PRODUCTION_AGENT_CREDENTIALS_ENABLED = process.env.VIDEO_PRODUCTION_AGENT_CREDENTIALS_ENABLED === "true";
 
 export function normalizeSecret(raw: string | undefined): string {
   const trimmed = (raw ?? "").trim().replace(/^['"]|['"]$/g, "");
@@ -105,4 +112,7 @@ function resolveDefaultDataRoot(): string {
 export const DEFAULT_DATA_ROOT = resolveDefaultDataRoot();
 export const DEFAULT_DB_PATH = path.join(DEFAULT_DATA_ROOT, "claw-empire.sqlite");
 export const DEFAULT_LOGS_DIR = path.join(DEFAULT_DATA_ROOT, "logs");
+export const VIDEO_PRODUCTION_ASSET_ROOT = path.resolve(
+  normalizePathEnv(process.env.VIDEO_PRODUCTION_ASSET_ROOT) || path.join(DEFAULT_DATA_ROOT, "video-production-assets"),
+);
 export const LEGACY_DB_PATH = path.join(process.cwd(), "climpire.sqlite");

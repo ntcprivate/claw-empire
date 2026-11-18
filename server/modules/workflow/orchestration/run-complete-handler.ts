@@ -8,6 +8,13 @@ import {
 import { evaluateRemotionOnlyGateFromLogFiles } from "../packs/video-render-engine-gate.ts";
 import { VieNeuTtsError } from "../packs/vieneu-tts.ts";
 import {
+  beginVideoProductionCompletion,
+  finishVideoProductionAttempt,
+  finishVideoProductionExecutionPendingReview,
+  isManagedVideoProductionTask,
+  requireOwnedVideoProductionAttempt,
+} from "../video-production.ts";
+import {
   getVoiceoverSubtask,
   isDelegatedVoiceoverTask,
   publishNarrationScript,
@@ -63,7 +70,56 @@ export function createRunCompleteHandler(deps: CreateRunCompleteHandlerDeps) {
 
   const voiceoverInFlight = new Set<string>();
 
-  function handleTaskRunComplete(taskId: string, exitCode: number): void {
+  function handleTaskRunComplete(taskId: string, exitCode: number, attemptId?: string): void {
+    const managedProduction = isManagedVideoProductionTask(db, taskId);
+    if (managedProduction) {
+      if (!attemptId || !requireOwnedVideoProductionAttempt(db, taskId, attemptId)) return;
+      const current = db.prepare("SELECT status FROM tasks WHERE id=?").get(taskId) as { status: string } | undefined;
+      if (current?.status !== "in_progress") return;
+      if (!beginVideoProductionCompletion(db, taskId, attemptId)) return;
+      if (exitCode === 0) {
+        const settled = finishVideoProductionExecutionPendingReview(db, taskId, attemptId, {
+          reason: "no_phase1_production_output_validator",
+        });
+        if (!settled) return;
+        activeProcesses.delete(taskId);
+        stopProgressTimer(taskId);
+        stopRequestedTasks.delete(taskId);
+        stopRequestModeByTask.delete(taskId);
+        const task = db.prepare("SELECT assigned_agent_id,title FROM tasks WHERE id=?").get(taskId) as
+          | { assigned_agent_id: string | null; title: string }
+          | undefined;
+        if (task?.assigned_agent_id) {
+          db.prepare("UPDATE agents SET status='idle',current_task_id=NULL WHERE id=? AND current_task_id=?").run(
+            task.assigned_agent_id,
+            taskId,
+          );
+          broadcast("agent_status", db.prepare("SELECT * FROM agents WHERE id=?").get(task.assigned_agent_id));
+        }
+        appendTaskLog(taskId, "system", "Worker exited successfully. The task is in review, the production stage remains blocked pending artifact validation, and the owned execution slot was released.");
+        broadcast("task_update", db.prepare("SELECT * FROM tasks WHERE id=?").get(taskId));
+        return;
+      }
+      const settled = finishVideoProductionAttempt(db, taskId, attemptId, "failed", { exitCode });
+      if (!settled) return;
+      activeProcesses.delete(taskId);
+      stopProgressTimer(taskId);
+      stopRequestedTasks.delete(taskId);
+      stopRequestModeByTask.delete(taskId);
+      const failedTask = db.prepare("SELECT assigned_agent_id FROM tasks WHERE id=?").get(taskId) as
+        | { assigned_agent_id: string | null }
+        | undefined;
+      if (failedTask?.assigned_agent_id) {
+        db.prepare("UPDATE agents SET status='idle',current_task_id=NULL WHERE id=? AND current_task_id=?").run(
+          failedTask.assigned_agent_id,
+          taskId,
+        );
+        broadcast("agent_status", db.prepare("SELECT * FROM agents WHERE id=?").get(failedTask.assigned_agent_id));
+      }
+      appendTaskLog(taskId, "error", `Production worker failed (exit code ${exitCode}); attempt ${attemptId} released by its owner.`);
+      broadcast("task_update", db.prepare("SELECT * FROM tasks WHERE id=?").get(taskId));
+      return;
+    }
     if (voiceoverInFlight.has(taskId)) return;
     if (exitCode === 0 && !stopRequestedTasks.has(taskId)) {
       const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as
@@ -126,10 +182,13 @@ export function createRunCompleteHandler(deps: CreateRunCompleteHandlerDeps) {
         return;
       }
     }
-    completeTaskRun(taskId, exitCode);
+    completeTaskRun(taskId, exitCode, attemptId);
   }
 
-  function completeTaskRun(taskId: string, exitCode: number): void {
+  function completeTaskRun(taskId: string, exitCode: number, attemptId?: string): void {
+    if (attemptId && isManagedVideoProductionTask(db, taskId) && !requireOwnedVideoProductionAttempt(db, taskId, attemptId)) {
+      return;
+    }
     activeProcesses.delete(taskId);
     stopProgressTimer(taskId);
 

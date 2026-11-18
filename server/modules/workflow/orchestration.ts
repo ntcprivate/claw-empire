@@ -655,8 +655,8 @@ export function initializeWorkflowPartC(ctx: RuntimeContext): WorkflowOrchestrat
     hasVisibleDiffSummary,
   });
 
-  function handleTaskRunComplete(taskId: string, exitCode: number): void {
-    runCompleteHandler.handleTaskRunComplete(taskId, exitCode);
+  function handleTaskRunComplete(taskId: string, exitCode: number, attemptId?: string): void {
+    runCompleteHandler.handleTaskRunComplete(taskId, exitCode, attemptId);
   }
 
   const reviewFinalizeTools = createReviewFinalizeTools({

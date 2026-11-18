@@ -1,4 +1,12 @@
 import path from "node:path";
+import {
+  assertVideoProductionTaskAdmission,
+  isManagedVideoProductionTask,
+  VideoProductionPolicyError,
+} from "../../../workflow/video-production.ts";
+import { hasContainerWorkerExecutor, isWorkerIsolationReady, probeWorkerIsolation } from "../../../workflow/worker-isolation.ts";
+import { requestVideoProductionExecution } from "../../../workflow/video-production-execution.ts";
+import { requireVideoProductionCeo } from "../video-production.ts";
 import { notifyTaskStatus } from "../../../../gateway/client.ts";
 import type { RuntimeContext } from "../../../../types/runtime-context.ts";
 import type { AgentRow } from "../../shared/types.ts";
@@ -87,6 +95,7 @@ export function registerTaskRunRoute(deps: TaskRunRouteDeps): void {
 
   app.post("/api/tasks/:id/run", (req, res) => {
     const id = String(req.params.id);
+    const resumeFromAttemptId = typeof req.body?.resume_attempt_id === "string" ? req.body.resume_attempt_id.trim() : undefined;
     const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as
       | {
           id: string;
@@ -104,6 +113,22 @@ export function registerTaskRunRoute(deps: TaskRunRouteDeps): void {
     if (!task) return res.status(404).json({ error: "not_found" });
     const taskLang = resolveLang(task.description ?? task.title);
     const delegatedVoiceover = isDelegatedVoiceoverTask(db, id, task);
+    const managedProductionTask = isManagedVideoProductionTask(db, id);
+    // `/run` changes task/agent state and can launch a worker. Treat it as a
+    // privileged production mutation, with the same CEO session + CSRF + live
+    // isolation checks as approval and plan changes.
+    if (managedProductionTask && !requireVideoProductionCeo(req, res)) return;
+    try {
+      assertVideoProductionTaskAdmission(db, id, { allowPaused: Boolean(resumeFromAttemptId) });
+    } catch (error) {
+      if (error instanceof VideoProductionPolicyError) {
+        return res.status(error.status).json({ error: error.code, message: error.message });
+      }
+      throw error;
+    }
+    if (managedProductionTask && !isWorkerIsolationReady()) {
+      return res.status(503).json({ error: "requires_worker_isolation", retryable: false });
+    }
 
     if (activeProcesses.has(id)) {
       const staleChild = activeProcesses.get(id);
@@ -144,6 +169,9 @@ export function registerTaskRunRoute(deps: TaskRunRouteDeps): void {
     }
 
     let agentId = task.assigned_agent_id || (req.body?.agent_id as string | undefined);
+    if (managedProductionTask && task.assigned_agent_id && req.body?.agent_id && req.body.agent_id !== task.assigned_agent_id) {
+      return res.status(403).json({ error: "production_assignee_identity_mismatch" });
+    }
     if (agentId) {
       const constrainedAgentIds = resolveConstrainedAgentScopeForTask(db as any, {
         workflow_pack_key: task.workflow_pack_key,
@@ -292,6 +320,12 @@ export function registerTaskRunRoute(deps: TaskRunRouteDeps): void {
     const provider = agent.cli_provider || "claude";
     if (!["claude", "codex", "gemini", "opencode", "kimi", "copilot", "antigravity", "api"].includes(provider)) {
       return res.status(400).json({ error: "unsupported_provider", provider });
+    }
+    if (managedProductionTask && provider !== "claude" && provider !== "codex" && provider !== "gemini" && provider !== "opencode" && provider !== "kimi") {
+      return res.status(503).json({ error: "production_worker_provider_not_configured", retryable: false });
+    }
+    if (managedProductionTask && !hasContainerWorkerExecutor(provider)) {
+      return res.status(503).json({ error: "production_worker_provider_not_configured", retryable: false });
     }
     ensureVideoPreprodRemotionBestPracticesSkill({
       db: db as any,
@@ -518,6 +552,8 @@ Whenever you complete a subtask, report it in this format:
 
     appendTaskLog(id, "system", `RUN start (agent=${agent.name}, provider=${provider})`);
 
+    let productionAttemptId: string | null = null;
+
     if (provider === "api") {
       const controller = new AbortController();
       const fakePid = getNextHttpAgentPid();
@@ -623,16 +659,45 @@ Whenever you complete a subtask, report it in this format:
       return res.json({ ok: true, pid: fakePid, logPath, cwd: agentCwd, worktree: !!worktreePath });
     }
 
-    const child = spawnCliAgent(id, provider, prompt, agentCwd, logPath, mainModel, mainReasoningLevel);
+    let child;
+    try {
+      if (managedProductionTask) {
+        const probe = probeWorkerIsolation();
+        const manager = db.prepare(
+          "SELECT p.manager_agent_id FROM video_production_stages s JOIN video_productions p ON p.project_id=s.project_id WHERE s.task_id=?",
+        ).get(id) as { manager_agent_id: string } | undefined;
+        if (!manager) return res.status(409).json({ error: "video_production_not_registered" });
+        const launched = requestVideoProductionExecution({
+          db,
+          taskId: id,
+          requesterAgentId: manager.manager_agent_id,
+          executorAgentId: agentId,
+          imageId: probe.immutableImageId,
+          launch: (attemptId) => spawnCliAgent(id, provider, prompt, agentCwd, logPath, mainModel, mainReasoningLevel, attemptId),
+          complete: handleTaskRunComplete,
+          onUnknown: (attemptId, detail) => appendTaskLog(id, "system", `Production attempt ${attemptId} requires reconciliation: ${JSON.stringify(detail)}`),
+          resumeFromAttemptId,
+        });
+        productionAttemptId = launched.attemptId;
+        child = launched.child;
+      } else {
+        child = spawnCliAgent(id, provider, prompt, agentCwd, logPath, mainModel, mainReasoningLevel);
+      }
+    } catch (error) {
+      if (managedProductionTask) return res.status(503).json({ error: "production_worker_launch_unavailable", retryable: false });
+      throw error;
+    }
 
     child.on("close", (code: number | null) => {
-      handleTaskRunComplete(id, code ?? 1);
+      if (!productionAttemptId) handleTaskRunComplete(id, code ?? 1);
     });
 
     const t = nowMs();
-    db.prepare(
-      "UPDATE tasks SET status = 'in_progress', assigned_agent_id = ?, started_at = ?, updated_at = ? WHERE id = ?",
-    ).run(agentId, t, t, id);
+    if (!productionAttemptId) {
+      db.prepare(
+        "UPDATE tasks SET status = 'in_progress', assigned_agent_id = ?, started_at = ?, updated_at = ? WHERE id = ?",
+      ).run(agentId, t, t, id);
+    }
     db.prepare("UPDATE agents SET status = 'working', current_task_id = ? WHERE id = ?").run(id, agentId);
 
     const updatedTask = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id);

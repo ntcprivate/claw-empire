@@ -1,4 +1,5 @@
 import type { RuntimeContext } from "../../../../types/runtime-context.ts";
+import { isManagedVideoProductionTask } from "../../../workflow/video-production.ts";
 import type { AgentRow } from "../../shared/types.ts";
 import { createHash } from "node:crypto";
 import {
@@ -208,6 +209,11 @@ export function registerTaskExecutionControlRoutes(deps: TaskExecutionControlRou
 
   app.post("/api/tasks/:id/stop", (req, res) => {
     const id = String(req.params.id);
+    if (isManagedVideoProductionTask(db, id)) {
+      return res
+        .status(409)
+        .json({ error: "video_production_managed_task", message: "Use production workflow controls." });
+    }
     if (!requireCsrfGuard(req as any, res)) return;
 
     const mode = String(req.body?.mode ?? req.query.mode ?? "cancel");
@@ -467,6 +473,11 @@ export function registerTaskExecutionControlRoutes(deps: TaskExecutionControlRou
   app.post("/api/tasks/:id/resume", (req, res) => {
     const id = String(req.params.id);
     if (!requireCsrfGuard(req as any, res)) return;
+    if (isManagedVideoProductionTask(db, id)) {
+      return res
+        .status(409)
+        .json({ error: "video_production_managed_task", message: "Use production workflow controls." });
+    }
 
     const { sessionId, controlToken } = readInterruptSessionProof(req as any);
     const hasAnyProof = Boolean(sessionId || controlToken);

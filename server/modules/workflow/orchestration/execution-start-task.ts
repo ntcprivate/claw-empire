@@ -1,4 +1,5 @@
 import path from "node:path";
+import { assertVideoProductionTaskAdmission, isManagedVideoProductionTask, VideoProductionPolicyError } from "../video-production.ts";
 import type { RuntimeContext } from "../../../types/runtime-context.ts";
 import { getDepartmentPromptForPack } from "../packs/department-scope.ts";
 import { prepareVideoVoiceoverRun } from "../packs/video-voiceover.ts";
@@ -75,6 +76,17 @@ export function createExecutionStartTaskTools(deps: CreateExecutionStartTaskTool
   } = deps;
 
   function startTaskExecutionForAgent(taskId: string, execAgent: any, deptId: string | null, deptName: string): void {
+    try {
+      assertVideoProductionTaskAdmission(db, taskId);
+    } catch (error) {
+      if (!(error instanceof VideoProductionPolicyError)) throw error;
+      appendTaskLog(taskId, "system", `Production execution blocked: ${error.code}`);
+      return;
+    }
+    if (isManagedVideoProductionTask(db, taskId)) {
+      appendTaskLog(taskId, "system", "Production execution blocked: production_execution_coordinator_required");
+      return;
+    }
     const execName = execAgent.name_ko || execAgent.name;
     const t = nowMs();
     db.prepare(

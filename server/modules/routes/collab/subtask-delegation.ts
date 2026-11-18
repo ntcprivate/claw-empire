@@ -1,4 +1,5 @@
 import type { Lang } from "../../../types/lang.ts";
+import { isManagedVideoProductionTask } from "../../workflow/video-production.ts";
 import type { AgentRow } from "./direct-chat.ts";
 import { reconcileVideoRenderDelegationState } from "../../workflow/orchestration/video-render-delegation-state.ts";
 import {
@@ -240,6 +241,7 @@ export function initializeSubtaskDelegation(deps: SubtaskDelegationDeps) {
   }
 
   function processSubtaskDelegations(taskId: string, opts?: { includeRender?: boolean }): void {
+    if (isManagedVideoProductionTask(db, taskId)) return;
     if (subtaskDelegationDispatchInFlight.has(taskId)) {
       const previous = pendingDelegationOptionsByTask.get(taskId);
       pendingDelegationOptionsByTask.set(taskId, {

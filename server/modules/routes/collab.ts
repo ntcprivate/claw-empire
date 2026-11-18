@@ -28,6 +28,13 @@ export function registerRoutesPartB(ctx: RuntimeContext): RouteCollabExports {
   const chooseSafeReply = __ctx.chooseSafeReply;
   const createWorktree = __ctx.createWorktree;
   const db = __ctx.db;
+  const hasAgentWorkflowPackColumn = (() => {
+    try { return (db.prepare("PRAGMA table_info(agents)").all() as Array<{ name?: unknown }>).some((column) => column.name === "workflow_pack_key"); }
+    catch { return false; }
+  })();
+  const excludeVideoStudioFromLegacyFallback = hasAgentWorkflowPackColumn
+    ? "AND COALESCE(workflow_pack_key,'development') != 'video_production'"
+    : "";
   const delegatedTaskToSubtask = __ctx.delegatedTaskToSubtask;
   const ensureClaudeMd = __ctx.ensureClaudeMd;
   const ensureTaskExecutionSession = __ctx.ensureTaskExecutionSession;
@@ -624,7 +631,7 @@ export function registerRoutesPartB(ctx: RuntimeContext): RouteCollabExports {
     // 기존 로직: 부서 전체에서 선택
     const agents = db
       .prepare(
-        `SELECT * FROM agents WHERE department_id = ? AND id != ? AND role != 'team_leader' ORDER BY
+        `SELECT * FROM agents WHERE 1=1 ${excludeVideoStudioFromLegacyFallback} AND department_id = ? AND id != ? AND role != 'team_leader' ORDER BY
        CASE status WHEN 'idle' THEN 0 WHEN 'break' THEN 1 WHEN 'working' THEN 2 ELSE 3 END,
        CASE role WHEN 'senior' THEN 0 WHEN 'junior' THEN 1 WHEN 'intern' THEN 2 ELSE 3 END`,
       )
@@ -693,6 +700,7 @@ export function registerRoutesPartB(ctx: RuntimeContext): RouteCollabExports {
             SELECT *
             FROM agents
             WHERE role = 'team_leader'
+              ${excludeVideoStudioFromLegacyFallback}
               AND (
                 department_id = ?
                 OR COALESCE(acts_as_planning_leader, 0) = 1
@@ -718,6 +726,7 @@ export function registerRoutesPartB(ctx: RuntimeContext): RouteCollabExports {
         FROM agents
         WHERE department_id = ?
           AND role = 'team_leader'
+          ${excludeVideoStudioFromLegacyFallback}
         ORDER BY
           CASE status WHEN 'idle' THEN 0 WHEN 'break' THEN 1 WHEN 'working' THEN 2 ELSE 3 END,
           created_at ASC
@@ -910,6 +919,7 @@ export function registerRoutesPartB(ctx: RuntimeContext): RouteCollabExports {
     detectMentions,
     handleMentionDelegation,
     findTeamLeader,
+    findBestSubordinate,
     getDeptName,
     getDeptRoleConstraint,
     formatTaskSubtaskProgressSummary,

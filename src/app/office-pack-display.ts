@@ -5,6 +5,18 @@ import {
   VIDEO_AUDIO_DEPARTMENT,
   VIDEO_AUDIO_PACK,
 } from "../../shared/video-audio-office";
+import { VIDEO_STUDIO_DEPARTMENTS } from "../../shared/video-studio-organization";
+
+const VIDEO_PRODUCTION_DEPARTMENT_IDS = new Set<string>(VIDEO_STUDIO_DEPARTMENTS.map((department) => department.id));
+
+/** Return only server-hydrated Video Production records. Client pack profiles are intentionally ignored. */
+export function videoProductionAgentsFromDatabase(agents: Agent[]): Agent[] {
+  return agents.filter((agent) => agent.workflow_pack_key === "video_production");
+}
+
+export function videoProductionDepartmentsFromDatabase(departments: Department[]): Department[] {
+  return departments.filter((department) => VIDEO_PRODUCTION_DEPARTMENT_IDS.has(department.id));
+}
 
 function parseSeedPackKey(agentId: string): string | null {
   const normalized = String(agentId ?? "").trim();
@@ -69,8 +81,9 @@ export function resolvePackAgentViews(params: {
   packAgents?: Agent[] | null;
 }): { scopedAgents: Agent[]; mergedAgents: Agent[] } {
   const { packKey, globalAgents, packAgents } = params;
+  const legacyVisibleAgents = globalAgents.filter((agent) => agent.workflow_pack_key !== "video_production");
   if (packKey === "development" || !packAgents || packAgents.length === 0) {
-    return { scopedAgents: globalAgents, mergedAgents: globalAgents };
+    return { scopedAgents: legacyVisibleAgents, mergedAgents: legacyVisibleAgents };
   }
 
   const globalById = new Map<string, Agent>();
@@ -107,6 +120,7 @@ export function resolvePackAgentViews(params: {
     ...scopedAgents,
     ...globalAgents.filter((agent) => {
       if (scopedAgentIds.has(agent.id)) return false;
+      if (agent.workflow_pack_key === "video_production") return false;
       const seedPack = parseSeedPackKey(agent.id);
       // Hide foreign office-pack seed agents from merged lists.
       if (seedPack && seedPack !== packKey) return false;

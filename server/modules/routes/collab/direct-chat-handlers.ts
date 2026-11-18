@@ -23,6 +23,7 @@ import { createDirectReplyRuntime } from "./direct-chat-runtime-reply.ts";
 import { createDirectTaskFlow } from "./direct-chat-task-flow.ts";
 import type { AgentRow, DirectChatDeps, PendingProjectBinding } from "./direct-chat-types.ts";
 import { hydrateOfficePackAgentFromSettings } from "./office-pack-agent-hydration.ts";
+import { getVideoProduction, isVideoProductionProject } from "../../workflow/video-production.ts";
 
 export function createDirectChatHandlers(deps: DirectChatDeps) {
   const {
@@ -65,6 +66,22 @@ export function createDirectChatHandlers(deps: DirectChatDeps) {
       (db.prepare("SELECT * FROM agents WHERE id = ?").get(agentId) as AgentRow | undefined) ??
       hydrateOfficePackAgentFromSettings(db, agentId, nowMs);
     if (!agent) return;
+
+    // Phase 1 conversations must not launch a tool-capable CLI outside the task
+    // admission boundary. Planning questions use the existing message channel.
+    if (agent.workflow_pack_key === "video_production" || isVideoProductionProject(db, options.projectId)) {
+      const snapshot = options.projectId ? getVideoProduction(db, options.projectId) : null;
+      const reply = snapshot
+        ? snapshot.missing_fields.length
+          ? `[Video Production Phase 1 — automatic planning reply] Project Brief needs: ${snapshot.missing_fields.join(", ")}. Please complete Project Brief in Projects or send [VIDEO_BRIEF] with expectedVersion ${snapshot.plan_version} and the project context. Production has not started.`
+          : `[Video Production Phase 1 — automatic planning reply] Plan v${snapshot.plan_version}: ${snapshot.state}. Review the brief and plan in Projects; use Approve or Request Changes there. Free-form chat does not grant approval. Later production stages are not implemented.`
+        : "[Video Production Phase 1 — automatic planning reply] Send a CEO Directive marked [video_production] with the selected project and absolute path to begin intake. Use the project context for brief clarification. Production has not started.";
+      sendAgentMessage(agent, reply);
+      void replyRuntime.relayReplyToMessenger(options, agent, reply).catch((err) => {
+        console.warn(`[video-production-chat] reply relay failed: ${String(err)}`);
+      });
+      return;
+    }
 
     if (agent.status === "offline") {
       const lang = resolveLang(ceoMessage);

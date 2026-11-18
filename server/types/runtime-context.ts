@@ -319,6 +319,7 @@ export interface RouteCollabExports {
   detectMentions: (...args: any[]) => any;
   handleMentionDelegation: (...args: any[]) => any;
   findTeamLeader: (...args: any[]) => any;
+  findBestSubordinate: (...args: any[]) => any;
   getDeptName: (...args: any[]) => any;
   getDeptRoleConstraint: (...args: any[]) => any;
   formatTaskSubtaskProgressSummary: (...args: any[]) => any;

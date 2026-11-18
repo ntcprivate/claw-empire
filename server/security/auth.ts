@@ -2,6 +2,7 @@ import cors from "cors";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import type { VideoStudioAction, VideoStudioRoleKey } from "../../shared/video-studio-organization.ts";
 
 import {
   ALLOWED_ORIGINS,
@@ -12,6 +13,54 @@ import {
 
 const CSRF_TOKEN = createHash("sha256").update(`csrf:${SESSION_AUTH_TOKEN}`, "utf8").digest("hex");
 const TASK_INTERRUPT_TOKEN_SCOPE = "task_interrupt_v1";
+export const VIDEO_PRODUCTION_AGENT_CAPABILITY_HEADER = "x-video-production-agent-capability";
+
+export interface VideoProductionAuthenticatedAgent {
+  kind: "agent";
+  agentId: string;
+  projectId: string;
+  roleKey: VideoStudioRoleKey;
+  credentialId: string;
+  action: VideoStudioAction;
+  attemptId?: string;
+  taskId?: string;
+  planVersion?: number;
+}
+
+export interface VideoProductionAgentRoute {
+  projectId: string;
+  action: VideoStudioAction;
+}
+
+const agentActors = new WeakMap<Request, VideoProductionAuthenticatedAgent>();
+
+export function getVideoProductionAuthenticatedAgent(req: Request): VideoProductionAuthenticatedAgent | null {
+  return agentActors.get(req) ?? null;
+}
+
+export function matchVideoProductionAgentRoute(req: Pick<Request, "method" | "path">): VideoProductionAgentRoute | null {
+  const method = (req.method ?? "GET").toUpperCase();
+  const match = req.path.match(/^\/api\/projects\/([A-Za-z0-9_-]{1,128})\/video-production\/(.*)$/);
+  if (!match) return null;
+  const [, projectId, endpoint] = match;
+  if (method === "GET" && endpoint === "organization") return { projectId, action: "studio.read" };
+  if (method === "GET" && (endpoint === "registry" || /^manifests\/[A-Za-z0-9_-]{1,128}$/.test(endpoint))) return { projectId, action: "studio.read" };
+  if (method === "PUT" && endpoint === "plan") return { projectId, action: "plan.update" };
+  if (method === "POST" && endpoint === "assignments") return { projectId, action: "task.assign" };
+  if (method === "PUT" && endpoint === "scenes/order") return { projectId, action: "screenplay.write" };
+  if ((method === "POST" && endpoint === "scenes") || (method === "PUT" && /^scenes\/[A-Za-z0-9_-]{1,128}$/.test(endpoint)) || (method === "DELETE" && /^scenes\/[A-Za-z0-9_-]{1,128}$/.test(endpoint))) return { projectId, action: "screenplay.write" };
+  if ((method === "POST" && /^scenes\/[A-Za-z0-9_-]{1,128}\/shots$/.test(endpoint)) ||
+      (method === "PUT" && /^scenes\/[A-Za-z0-9_-]{1,128}\/shots\/order$/.test(endpoint)) ||
+      (method === "PUT" && /^shots\/[A-Za-z0-9_-]{1,128}$/.test(endpoint)) || (method === "DELETE" && /^shots\/[A-Za-z0-9_-]{1,128}$/.test(endpoint))) return { projectId, action: "shot_spec.write" };
+  if ((method === "POST" && endpoint === "assets") || (method === "POST" && /^shots\/[A-Za-z0-9_-]{1,128}\/takes$/.test(endpoint))) return { projectId, action: "footage.submit" };
+  if ((method === "POST" && endpoint === "visual-references/assets") || (method === "POST" && endpoint === "visual-references") ||
+      (method === "PUT" && /^visual-references\/[A-Za-z0-9_-]{1,128}\/version$/.test(endpoint)) ||
+      (method === "POST" && /^shots\/[A-Za-z0-9_-]{1,128}\/references$/.test(endpoint))) return { projectId, action: "visual.manage" };
+  if (method === "POST" && /^takes\/[A-Za-z0-9_-]{1,128}\/review$/.test(endpoint)) return { projectId, action: "take.review" };
+  if (method === "POST" && /^shots\/[A-Za-z0-9_-]{1,128}\/regeneration$/.test(endpoint)) return { projectId, action: "regeneration.request" };
+  if (method === "POST" && endpoint === "manifests") return { projectId, action: "edit.manage" };
+  return null;
+}
 
 export function isLoopbackHostname(hostname: string): boolean {
   const h = hostname.toLowerCase();
@@ -175,7 +224,10 @@ export function isIncomingMessageOriginTrusted(req: IncomingMessage): boolean {
   return isTrustedOrigin(origin);
 }
 
-export function installSecurityMiddleware(app: Express): void {
+export function installSecurityMiddleware(
+  app: Express,
+  options: { resolveVideoProductionAgent?: (token: string, projectId: string, action: VideoStudioAction) => VideoProductionAuthenticatedAgent | null } = {},
+): void {
   const corsMiddleware = cors({
     origin(origin, callback) {
       if (!origin) return callback(null, true);
@@ -184,7 +236,7 @@ export function installSecurityMiddleware(app: Express): void {
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["content-type", "authorization", "x-inbox-secret", "x-csrf-token", "x-task-interrupt-token"],
+    allowedHeaders: ["content-type", "authorization", "x-inbox-secret", "x-csrf-token", "x-task-interrupt-token", VIDEO_PRODUCTION_AGENT_CAPABILITY_HEADER],
     maxAge: 600,
   });
 
@@ -200,9 +252,12 @@ export function installSecurityMiddleware(app: Express): void {
   app.use(express.json({ limit: "12mb" }));
 
   app.get("/api/auth/session", (req, res) => {
-    const bearer = bearerToken(req);
-    const hasBearerAuth = bearer === SESSION_AUTH_TOKEN;
-    if (!isLoopbackRequest(req) && !hasBearerAuth) {
+    if (req.header(VIDEO_PRODUCTION_AGENT_CAPABILITY_HEADER)) {
+      return res.status(401).json({ error: "video_production_agent_cannot_bootstrap_ceo_session" });
+    }
+    // Loopback proves transport location, not CEO identity. A worker must not
+    // bootstrap a privileged browser session merely by reaching localhost.
+    if (!isAuthenticated(req)) {
       return res.status(401).json({ error: "unauthorized" });
     }
     issueSessionCookie(req, res);
@@ -211,8 +266,28 @@ export function installSecurityMiddleware(app: Express): void {
 
   app.use((req, res, next) => {
     if (!req.path.startsWith("/api/")) return next();
+    const capability = req.header(VIDEO_PRODUCTION_AGENT_CAPABILITY_HEADER)?.trim() ?? "";
+    const route = matchVideoProductionAgentRoute(req);
+    const ceoAuthenticated = isAuthenticated(req);
+
+    // Agent credentials are never CEO sessions. A request carrying both
+    // identities is ambiguous and rejected instead of silently elevating it.
+    if (capability && ceoAuthenticated) {
+      return res.status(401).json({ error: "ambiguous_video_production_identity" });
+    }
+    if (capability && !route) {
+      return res.status(401).json({ error: "video_production_agent_route_forbidden" });
+    }
+    if (capability && route) {
+      const actor = options.resolveVideoProductionAgent?.(capability, route.projectId, route.action) ?? null;
+      if (!actor || actor.kind !== "agent" || actor.projectId !== route.projectId || actor.action !== route.action) {
+        return res.status(401).json({ error: "video_production_agent_credential_invalid" });
+      }
+      agentActors.set(req, actor);
+      return next();
+    }
     if (isPublicApiPath(req.path)) return next();
-    if (!isAuthenticated(req)) {
+    if (!ceoAuthenticated) {
       return res.status(401).json({ error: "unauthorized" });
     }
     issueSessionCookie(req, res);

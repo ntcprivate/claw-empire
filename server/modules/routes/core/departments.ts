@@ -109,6 +109,7 @@ export function registerDepartmentRoutes(deps: DepartmentRouteDeps): void {
     } catch {
       // fall through to development fallback
     }
+    if (packKey === "video_production") return [];
     return listDevelopmentDepartments(includeSeed);
   }
 

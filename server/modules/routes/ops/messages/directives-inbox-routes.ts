@@ -12,6 +12,12 @@ import type { RuntimeContext } from "../../../../types/runtime-context.ts";
 import type { AgentRow, DelegationOptions, StoredMessage } from "../../shared/types.ts";
 import type { DecisionReplyBridgeInput, DecisionReplyBridgeResult } from "./decision-inbox-routes.ts";
 import { resolveDirectiveLeaderCandidateScope } from "./directive-leader-scope.ts";
+import {
+  acceptVideoProductionDirective,
+  isVideoProductionDirective,
+  videoProductionIntakeKey,
+} from "./video-production-intake.ts";
+import { publishVideoProductionUpdate } from "../../core/video-production.ts";
 
 type DirectiveAndInboxRouteCtx = Pick<RuntimeContext, "app" | "db" | "broadcast">;
 
@@ -187,7 +193,7 @@ export function registerDirectiveAndInboxRoutes(
 
   app.post("/api/directives", async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const idempotencyKey = resolveMessageIdempotencyKey(req, body, "api.directives");
+    let idempotencyKey = resolveMessageIdempotencyKey(req, body, "api.directives");
     const content = body.content;
     const explicitProjectId = normalizeTextField(body.project_id);
     const explicitProjectPath = normalizeTextField(body.project_path);
@@ -210,7 +216,12 @@ export function registerDirectiveAndInboxRoutes(
       return res.status(400).json({ error: "content_required" });
     }
 
-    if (enforceDirectiveProjectBinding && !explicitProjectId) {
+    const videoProduction = isVideoProductionDirective(db, body, content);
+    if (videoProduction) {
+      idempotencyKey =
+        resolveMessageIdempotencyKey(req, body, "api.video-production") ?? videoProductionIntakeKey(body, content);
+    }
+    if (enforceDirectiveProjectBinding && !explicitProjectId && !videoProduction) {
       if (
         !recordMessageIngressAuditOr503(res, {
           endpoint: "/api/directives",
@@ -274,6 +285,31 @@ export function registerDirectiveAndInboxRoutes(
       throw err;
     }
     const msg = { ...storedMessage };
+
+    if (videoProduction) {
+      if (
+        created &&
+        !(await recordAcceptedIngressAuditOrRollback(
+          res,
+          {
+            endpoint: "/api/directives",
+            req,
+            body,
+            idempotencyKey,
+            outcome: "accepted",
+            statusCode: 200,
+            detail: "video_production",
+          },
+          msg.id,
+        ))
+      )
+        return;
+      const production = acceptVideoProductionDirective(db, res, body, msg.id, content);
+      if (!production) return;
+      if (created) broadcast("announcement", msg);
+      publishVideoProductionUpdate({ db, broadcast }, production);
+      return res.json({ ok: true, message: msg, production, duplicate: !created });
+    }
 
     if (!created) {
       if (
@@ -403,7 +439,7 @@ export function registerDirectiveAndInboxRoutes(
 
   app.post("/api/inbox", async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const idempotencyKey = resolveMessageIdempotencyKey(req, body, "api.inbox");
+    let idempotencyKey = resolveMessageIdempotencyKey(req, body, "api.inbox");
     if (!INBOX_WEBHOOK_SECRET) {
       if (
         !recordMessageIngressAuditOr503(res, {
@@ -487,7 +523,12 @@ export function registerDirectiveAndInboxRoutes(
       return res.status(400).json({ error: "empty_content" });
     }
 
-    if (enforceDirectiveProjectBinding && isDirective && !inboxProjectId) {
+    const videoProduction = isDirective && isVideoProductionDirective(db, body, content);
+    if (videoProduction) {
+      idempotencyKey =
+        resolveMessageIdempotencyKey(req, body, "api.video-production") ?? videoProductionIntakeKey(body, content);
+    }
+    if (enforceDirectiveProjectBinding && isDirective && !inboxProjectId && !videoProduction) {
       if (
         !recordMessageIngressAuditOr503(res, {
           endpoint: "/api/inbox",
@@ -646,6 +687,38 @@ export function registerDirectiveAndInboxRoutes(
       throw err;
     }
     const msg = { ...storedMessage };
+
+    if (videoProduction) {
+      if (
+        created &&
+        !(await recordAcceptedIngressAuditOrRollback(
+          res,
+          {
+            endpoint: "/api/inbox",
+            req,
+            body,
+            idempotencyKey,
+            outcome: "accepted",
+            statusCode: 200,
+            detail: "video_production",
+          },
+          msg.id,
+        ))
+      )
+        return;
+      const production = acceptVideoProductionDirective(db, res, body, msg.id, content);
+      if (!production) return;
+      if (created) broadcast("announcement", msg);
+      publishVideoProductionUpdate({ db, broadcast }, production);
+      return res.json({
+        ok: true,
+        id: msg.id,
+        directive: true,
+        production,
+        duplicate: !created,
+        routed: "video_production",
+      });
+    }
 
     if (!created) {
       if (

@@ -2,6 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { CLI_WORKER_RUNTIME_MODE } from "../../../config/runtime.ts";
+import { CONTAINER_WORKER_EXECUTOR_REGISTRY, probeWorkerIsolation, spawnIsolatedWorker } from "../worker-isolation.ts";
 
 type CliRuntimeDeps = {
   db: any;
@@ -18,6 +21,8 @@ type CliRuntimeDeps = {
   activeProcesses: Map<string, ChildProcess>;
   createSubtaskFromCli: (taskId: string, toolUseId: string, title: string) => void;
   completeSubtaskFromCli: (toolUseId: string) => void;
+  workerExecutorRegistry?: Readonly<Record<string, readonly string[]>>;
+  workerIsolationProbe?: typeof probeWorkerIsolation;
 };
 
 export function createCliRuntimeTools(deps: CliRuntimeDeps) {
@@ -36,6 +41,8 @@ export function createCliRuntimeTools(deps: CliRuntimeDeps) {
     activeProcesses,
     createSubtaskFromCli,
     completeSubtaskFromCli,
+    workerExecutorRegistry = CONTAINER_WORKER_EXECUTOR_REGISTRY,
+    workerIsolationProbe = probeWorkerIsolation,
   } = deps;
 
   // Codex multi-agent: map thread_id → cli_tool_use_id (item.id from spawn_agent)
@@ -225,13 +232,24 @@ export function createCliRuntimeTools(deps: CliRuntimeDeps) {
     logPath: string,
     model?: string,
     reasoningLevel?: string,
+    attemptId?: string,
   ): ChildProcess {
     clearCliOutputDedup(taskId);
+    const args = buildAgentArgs(provider, model, reasoningLevel);
+    let isolatedLaunch: { imageId: string; command: readonly string[]; attemptId: string } | null = null;
+    if (CLI_WORKER_RUNTIME_MODE === "container") {
+      const probe = workerIsolationProbe();
+      if (!probe.ready || !probe.immutableImageId) {
+        throw new Error(`worker_container_runtime_unavailable:${probe.reason}`);
+      }
+      const command = workerExecutorRegistry[provider];
+      if (!command?.length) throw new Error(`worker_provider_not_configured:${provider}`);
+      isolatedLaunch = { imageId: probe.immutableImageId, command, attemptId: attemptId ?? randomUUID() };
+    }
     // Save prompt for debugging
     const promptPath = path.join(logsDir, `${taskId}.prompt.txt`);
     fs.writeFileSync(promptPath, prompt, "utf8");
 
-    const args = buildAgentArgs(provider, model, reasoningLevel);
     const logStream = fs.createWriteStream(logPath, { flags: "a" });
     const { safeWrite, safeEnd } = createSafeLogStreamOps(logStream);
     safeWrite(`\n===== task run start ${new Date().toISOString()} | provider=${provider} =====\n`);
@@ -246,14 +264,27 @@ export function createCliRuntimeTools(deps: CliRuntimeDeps) {
     cleanEnv.CI = "1";
     if (!cleanEnv.TERM) cleanEnv.TERM = "dumb";
 
-    const child = spawn(args[0], args.slice(1), {
-      cwd: projectPath,
-      env: cleanEnv,
-      shell: process.platform === "win32",
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: process.platform !== "win32",
-      windowsHide: true,
-    });
+    let child: ChildProcess;
+    if (CLI_WORKER_RUNTIME_MODE === "container") {
+      if (!isolatedLaunch) throw new Error("worker_container_launch_not_prepared");
+      child = spawnIsolatedWorker({
+        imageId: isolatedLaunch.imageId,
+        attemptId: isolatedLaunch.attemptId,
+        executorCommand: isolatedLaunch.command,
+        prompt,
+      });
+    } else {
+      child = spawn(args[0], args.slice(1), {
+        cwd: projectPath,
+        env: cleanEnv,
+        shell: process.platform === "win32",
+        stdio: ["pipe", "pipe", "pipe"],
+        detached: process.platform !== "win32",
+        windowsHide: true,
+      });
+      child.stdin?.write(prompt);
+      child.stdin?.end();
+    }
 
     let finished = false;
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -327,9 +358,6 @@ export function createCliRuntimeTools(deps: CliRuntimeDeps) {
     });
 
     // Deliver prompt via stdin (cross-platform safe)
-    child.stdin?.write(prompt);
-    child.stdin?.end();
-
     // Pipe agent output to log file AND broadcast via WebSocket
     stdoutListener = (chunk: Buffer) => {
       touchIdleTimer();
@@ -338,7 +366,7 @@ export function createCliRuntimeTools(deps: CliRuntimeDeps) {
       if (shouldSkipDuplicateCliOutput(taskId, "stdout", text)) return;
       safeWrite(text);
       broadcast("cli_output", { task_id: taskId, stream: "stdout", data: text });
-      parseAndCreateSubtasks(taskId, text);
+      if (CLI_WORKER_RUNTIME_MODE !== "container") parseAndCreateSubtasks(taskId, text);
     };
     stderrListener = (chunk: Buffer) => {
       touchIdleTimer();

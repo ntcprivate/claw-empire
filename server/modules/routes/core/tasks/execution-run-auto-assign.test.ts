@@ -2,6 +2,15 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { resolveConstrainedAgentScopeForTask, selectAutoAssignableAgentForTask } from "./execution-run-auto-assign.ts";
 
+it("does not auto-assign generic CLI execution for managed video production", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    expect(selectAutoAssignableAgentForTask(db, { workflow_pack_key: "video_production" })).toBeNull();
+  } finally {
+    db.close();
+  }
+});
+
 function setupDb(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   db.exec(`

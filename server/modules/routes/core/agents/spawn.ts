@@ -1,4 +1,5 @@
 import path from "node:path";
+import { assertVideoProductionTaskAdmission, isManagedVideoProductionTask, VideoProductionPolicyError } from "../../../workflow/video-production.ts";
 import { notifyTaskStatus } from "../../../../gateway/client.ts";
 import type { RuntimeContext } from "../../../../types/runtime-context.ts";
 import { buildWorkflowPackExecutionGuidance } from "../../../workflow/packs/execution-guidance.ts";
@@ -146,6 +147,17 @@ export function registerAgentSpawnRoute(ctx: RuntimeContext): void {
       | undefined;
     if (!task) {
       return res.status(400).json({ error: "task_not_found" });
+    }
+    try {
+      assertVideoProductionTaskAdmission(db, taskId);
+    } catch (error) {
+      if (error instanceof VideoProductionPolicyError) {
+        return res.status(error.status).json({ error: error.code, message: error.message });
+      }
+      throw error;
+    }
+    if (isManagedVideoProductionTask(db, taskId)) {
+      return res.status(409).json({ error: "production_execution_coordinator_required" });
     }
     ensureVideoPreprodRemotionBestPracticesSkill({
       db: db as any,

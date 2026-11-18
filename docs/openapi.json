@@ -56,6 +56,11 @@
         "type": "apiKey",
         "in": "header",
         "name": "x-inbox-secret"
+      },
+      "videoProductionAgentCapability": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-video-production-agent-capability"
       }
     },
     "schemas": {
@@ -15601,6 +15606,31 @@
             }
           }
         ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "agent_id": {
+                    "type": "string",
+                    "description": "Optional CEO-selected executor; an existing assignment cannot be replaced."
+                  },
+                  "resume_attempt_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Most recent paused attempt to resume after approval, dependency and executor checks."
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "agent_id": "agent_001"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Task run started",
@@ -18390,6 +18420,4025 @@
             "bearerAuth": []
           }
         ]
+      }
+    },
+    "/api/projects/{id}/video-production": {
+      "get": {
+        "tags": ["projects"],
+        "summary": "Read video production brief, plan, manager, stages and approvals",
+        "description": "Video Production Phase 1. Only Intake & Planning is implemented; later stages cannot execute. Mutations require an authenticated CEO session and x-csrf-token. Actor identities supplied by clients are ignored.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current persisted production snapshot; null when intake has not been initiated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "production": {
+                      "type": "object",
+                      "nullable": true,
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": ["production"]
+                },
+                "example": {
+                  "production": {
+                    "additionalProp1": "value"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid brief, version or decision."
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "unauthorized",
+                  "message": "Authentication is required."
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "forbidden",
+                  "message": "You do not have permission to access this resource."
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Production intake not found."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/plan": {
+      "put": {
+        "tags": ["projects"],
+        "summary": "Submit a versioned video brief and production plan",
+        "description": "Video Production Phase 1. Only Intake & Planning is implemented; later stages cannot execute. Mutations require an authenticated CEO session and x-csrf-token. Actor identities supplied by clients are ignored.",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-csrf-token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["brief", "expectedVersion"],
+                "properties": {
+                  "brief": {
+                    "type": "object",
+                    "properties": {
+                      "title": {
+                        "type": "string",
+                        "maxLength": 10000
+                      },
+                      "objective": {
+                        "type": "string",
+                        "maxLength": 10000
+                      },
+                      "targetAudience": {
+                        "type": "string",
+                        "maxLength": 10000
+                      },
+                      "duration": {
+                        "type": "string",
+                        "maxLength": 10000
+                      },
+                      "aspectRatio": {
+                        "type": "string",
+                        "maxLength": 10000
+                      },
+                      "language": {
+                        "type": "string",
+                        "maxLength": 10000
+                      },
+                      "style": {
+                        "type": "string",
+                        "maxLength": 10000
+                      },
+                      "deliveryPlatform": {
+                        "type": "string",
+                        "maxLength": 10000
+                      },
+                      "constraints": {
+                        "type": "string",
+                        "maxLength": 10000
+                      }
+                    }
+                  },
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              },
+              "example": {
+                "brief": {
+                  "title": "string",
+                  "objective": "string",
+                  "targetAudience": "string",
+                  "duration": "string",
+                  "aspectRatio": "string",
+                  "language": "string",
+                  "style": "string",
+                  "deliveryPlatform": "string",
+                  "constraints": "string"
+                },
+                "expectedVersion": 1
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Current persisted production snapshot; null when intake has not been initiated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "production": {
+                      "type": "object",
+                      "nullable": true,
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": ["production"]
+                },
+                "example": {
+                  "production": {
+                    "additionalProp1": "value"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid brief, version or decision."
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "unauthorized",
+                  "message": "Authentication is required."
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "forbidden",
+                  "message": "You do not have permission to access this resource."
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Production intake not found."
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "conflict",
+                  "message": "The request conflicts with current server state."
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/decision": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Approve the current plan version or request changes",
+        "description": "Video Production Phase 1. Only Intake & Planning is implemented; later stages cannot execute. Mutations require an authenticated CEO session and x-csrf-token. Actor identities supplied by clients are ignored.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-csrf-token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["version", "decision"],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "decision": {
+                    "type": "string",
+                    "enum": ["approve", "request_changes"]
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 10000
+                  }
+                }
+              },
+              "example": {
+                "version": 1,
+                "decision": "approve"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Current persisted production snapshot; null when intake has not been initiated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "production": {
+                      "type": "object",
+                      "nullable": true,
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": ["production"]
+                },
+                "example": {
+                  "production": {
+                    "additionalProp1": "value"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid brief, version or decision."
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "unauthorized",
+                  "message": "Authentication is required."
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "forbidden",
+                  "message": "You do not have permission to access this resource."
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Production intake not found."
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "conflict",
+                  "message": "The request conflicts with current server state."
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/{id}/video-production/cancel": {
+      "post": {
+        "tags": ["tasks"],
+        "summary": "Cancel an owned Video Production attempt",
+        "description": "Requires the authenticated CEO session, CSRF token and verified worker isolation. The attempt ID must match the currently owned attempt. Unknown worker state retains the reservation.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-csrf-token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["attempt_id"],
+                "properties": {
+                  "attempt_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "attempt_id": "a1b2c3d4-e5f6-4789-8abc-def012345678"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Attempt stopped and verified; duplicate cancellation is idempotent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Attempt ID is required."
+          },
+          "401": {
+            "description": "CEO authentication required."
+          },
+          "403": {
+            "description": "Invalid CSRF token or worker identity mismatch."
+          },
+          "409": {
+            "description": "Attempt is stale or no longer owned by this task."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Isolation or worker stop could not be verified; reservation remains held."
+          }
+        }
+      }
+    },
+    "/api/video-production/organization/setup": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Configure the server-owned Video Production organization",
+        "description": "CEO session and CSRF required. Opt-in setup; setup itself does not require worker isolation. Never issues agent credentials.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              },
+              "example": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Organization configured idempotently.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request."
+          },
+          "401": {
+            "description": "Unauthorized."
+          },
+          "403": {
+            "description": "Forbidden."
+          },
+          "409": {
+            "description": "Conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Worker isolation is not ready for production mutation."
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/organization": {
+      "get": {
+        "tags": ["projects"],
+        "summary": "Read Video Production organization and project grants",
+        "description": "CEO session or narrow project-scoped agent capability with studio.read. Returns actual database organization records separately from server role definitions.",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Organization, role definitions, project grants and stage ownership metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request."
+          },
+          "401": {
+            "description": "Unauthorized."
+          },
+          "403": {
+            "description": "Forbidden."
+          },
+          "409": {
+            "description": "Conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Worker isolation is not ready for production mutation."
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/agents/{agentId}/grant": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Grant an agent project-scoped Video Production access",
+        "description": "CEO session and CSRF required. Existing project only. Does not issue a credential.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "grant_key": {
+                    "type": "string",
+                    "enum": ["member", "coordinator"]
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "grant_key": "member"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Project grant stored and audited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request."
+          },
+          "401": {
+            "description": "Unauthorized."
+          },
+          "403": {
+            "description": "Forbidden."
+          },
+          "409": {
+            "description": "Conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Worker isolation is not ready for production mutation."
+          }
+        }
+      },
+      "delete": {
+        "tags": ["projects"],
+        "summary": "Revoke an agent project grant",
+        "description": "CEO session and CSRF required. Revokes scoped credentials for the selected agent.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project grant revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request."
+          },
+          "401": {
+            "description": "Unauthorized."
+          },
+          "403": {
+            "description": "Forbidden."
+          },
+          "409": {
+            "description": "Conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Worker isolation is not ready for production mutation."
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/assignments": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Assign an existing implemented Video Production task",
+        "description": "CEO session or narrow production-manager capability. Only existing tasks for implemented stages can be assigned. Never creates tasks or enables execution.",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["task_id", "agent_id"],
+                "properties": {
+                  "task_id": {
+                    "type": "string"
+                  },
+                  "agent_id": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "task_id": "task_001",
+                "agent_id": "video_production-seed-5"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Existing assignment updated and audited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request."
+          },
+          "401": {
+            "description": "Unauthorized."
+          },
+          "403": {
+            "description": "Forbidden."
+          },
+          "409": {
+            "description": "Conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Worker isolation is not ready for production mutation."
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/registry": {
+      "get": {
+        "tags": ["projects"],
+        "summary": "Read the persisted Scene, Shot, Take, Asset, review, continuity and manifest registry",
+        "description": "Requires studio.read for agent capability; CEO bearer session is read-only.. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_get_registry",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Persisted registry read model including current approved pointers and computed dependency/manifest currentness.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/manifests/{manifestId}": {
+      "get": {
+        "tags": ["projects"],
+        "summary": "Read an immutable manifest and its currentness",
+        "description": "Requires studio.read for agent capability; CEO bearer session is read-only.. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_get_manifests_manifestId",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "manifestId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/scenes": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Create a Scene and first immutable version",
+        "description": "Requires screenplay.write (Haru).. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_post_scenes",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sceneId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "sortOrder": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "required": {
+                    "type": "boolean"
+                  },
+                  "content": {
+                    "type": "object"
+                  }
+                },
+                "required": ["sceneId", "content"],
+                "additionalProperties": true
+              },
+              "example": {
+                "sceneId": "string",
+                "content": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/scenes/order": {
+      "put": {
+        "tags": ["projects"],
+        "summary": "Reorder all active Scenes",
+        "description": "Requires screenplay.write (Haru); supplied IDs must be the exact active project set.. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_put_scenes_order",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "scene_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    }
+                  }
+                },
+                "required": ["scene_ids"],
+                "additionalProperties": true
+              },
+              "example": {
+                "scene_ids": ["string"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/scenes/{sceneId}": {
+      "put": {
+        "tags": ["projects"],
+        "summary": "Append a Scene version",
+        "description": "Requires screenplay.write (Haru); expectedVersion is a compare-and-swap head.. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_put_scenes_sceneId",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sceneId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "content": {
+                    "type": "object"
+                  },
+                  "sortOrder": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "required": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["expectedVersion", "content"],
+                "additionalProperties": true
+              },
+              "example": {
+                "expectedVersion": 1,
+                "content": {}
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["projects"],
+        "summary": "Soft-delete a Scene",
+        "description": "Requires screenplay.write (Haru); historical versions remain.. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_delete_scenes_sceneId",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sceneId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": ["expectedVersion"],
+                "additionalProperties": true
+              },
+              "example": {
+                "expectedVersion": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/scenes/{sceneId}/shots": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Create a Shot and first immutable specification",
+        "description": "Requires shot_spec.write (Haru).. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_post_scenes_sceneId_shots",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sceneId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "shotId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "sortOrder": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "content": {
+                    "type": "object"
+                  }
+                },
+                "required": ["shotId", "content"],
+                "additionalProperties": true
+              },
+              "example": {
+                "shotId": "string",
+                "content": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/scenes/{sceneId}/shots/order": {
+      "put": {
+        "tags": ["projects"],
+        "summary": "Reorder all active Shots in a Scene",
+        "description": "Requires shot_spec.write (Haru); appends ordered version snapshots.. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_put_scenes_sceneId_shots_order",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sceneId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "shot_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    }
+                  }
+                },
+                "required": ["shot_ids"],
+                "additionalProperties": true
+              },
+              "example": {
+                "shot_ids": ["string"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/shots/{shotId}": {
+      "put": {
+        "tags": ["projects"],
+        "summary": "Append a Shot specification version",
+        "description": "Requires shot_spec.write (Haru); expectedVersion is a compare-and-swap head.. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_put_shots_shotId",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "shotId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "content": {
+                    "type": "object"
+                  }
+                },
+                "required": ["expectedVersion", "content"],
+                "additionalProperties": true
+              },
+              "example": {
+                "expectedVersion": 1,
+                "content": {}
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["projects"],
+        "summary": "Soft-delete a Shot",
+        "description": "Requires shot_spec.write (Haru); historical takes and reviews remain.. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_delete_shots_shotId",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "shotId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": ["expectedVersion"],
+                "additionalProperties": true
+              },
+              "example": {
+                "expectedVersion": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/assets": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Upload immutable footage bytes and register verified asset metadata",
+        "description": "Requires footage.submit (Miro).. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_post_assets",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-video-production-asset-id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "x-video-production-asset-metadata",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "JSON-encoded bounded asset metadata."
+            }
+          },
+          {
+            "name": "x-video-production-shot-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "x-video-production-shot-version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "413": {
+            "description": "Upload exceeds the 256 MiB limit."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "description": "Raw media bytes; no filesystem paths are accepted. Server verifies bounded size, declared length, signature, containment and SHA-256. Codec/creative QC is not performed.",
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "video/mp4": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "video/webm": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "audio/wav": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "audio/ogg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "audio/mpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/visual-references/assets": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Upload immutable visual-reference bytes",
+        "description": "Requires visual.manage (Yuna).. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_post_visual_references_assets",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-video-production-asset-id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "x-video-production-asset-metadata",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "JSON-encoded bounded asset metadata."
+            }
+          },
+          {
+            "name": "x-video-production-shot-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "x-video-production-shot-version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "413": {
+            "description": "Upload exceeds the 256 MiB limit."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "description": "Raw media bytes; no filesystem paths are accepted. Server verifies bounded size, declared length, signature, containment and SHA-256. Codec/creative QC is not performed.",
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "video/mp4": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "video/webm": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "audio/wav": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "audio/ogg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "audio/mpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/visual-references": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Create a versioned visual-reference identity",
+        "description": "Requires visual.manage (Yuna).. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_post_visual_references",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "definition": {
+                    "type": "object"
+                  },
+                  "assetId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": ["definition", "assetId"],
+                "additionalProperties": true
+              },
+              "example": {
+                "definition": {},
+                "assetId": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/visual-references/{referenceId}/version": {
+      "put": {
+        "tags": ["projects"],
+        "summary": "Append a visual-reference asset/metadata version",
+        "description": "Requires visual.manage (Yuna); invalidates dependencies without changing old bytes.. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_put_visual_references_referenceId_version",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "referenceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "assetId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "metadata": {
+                    "type": "object"
+                  }
+                },
+                "required": ["expectedVersion", "assetId", "metadata"],
+                "additionalProperties": true
+              },
+              "example": {
+                "expectedVersion": 1,
+                "assetId": "string",
+                "metadata": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/shots/{shotId}/references": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Append a Shot version with a project-scoped continuity/reference dependency",
+        "description": "Requires visual.manage (Yuna).. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_post_shots_shotId_references",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "shotId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedShotVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "reference": {
+                    "type": "object"
+                  }
+                },
+                "required": ["expectedShotVersion", "reference"],
+                "additionalProperties": true
+              },
+              "example": {
+                "expectedShotVersion": 1,
+                "reference": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/shots/{shotId}/takes": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Register an asset-first Take for an exact Shot version",
+        "description": "Requires footage.submit (Miro); does not generate media or mark QC complete.. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_post_shots_shotId_takes",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "shotId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "shotVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "assetId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "metadata": {
+                    "type": "object"
+                  }
+                },
+                "required": ["shotVersion", "assetId", "metadata"],
+                "additionalProperties": true
+              },
+              "example": {
+                "shotVersion": 1,
+                "assetId": "string",
+                "metadata": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/takes/{takeId}/review": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Approve or reject an exact Take/Shot/Asset version",
+        "description": "Requires take.review (Yuna); latest reviewer and feedback are persisted.. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_post_takes_takeId_review",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "takeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedShotVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "expectedAssetId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "decision": {
+                    "type": "string",
+                    "enum": ["approved", "rejected"]
+                  },
+                  "feedback": {
+                    "type": "string",
+                    "maxLength": 5000
+                  }
+                },
+                "required": ["expectedShotVersion", "expectedAssetId", "decision", "feedback"],
+                "additionalProperties": true
+              },
+              "example": {
+                "expectedShotVersion": 1,
+                "expectedAssetId": "string",
+                "decision": "approved",
+                "feedback": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/shots/{shotId}/regeneration": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Record an idempotent regeneration request for a rejected Shot",
+        "description": "Requires regeneration.request and actual project manager/coordinator identity (Dami). It creates no runnable task or worker.. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_post_shots_shotId_regeneration",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "shotId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedShotVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "rejectedTakeId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 4000
+                  }
+                },
+                "required": ["expectedShotVersion", "rejectedTakeId", "idempotencyKey", "reason"],
+                "additionalProperties": true
+              },
+              "example": {
+                "expectedShotVersion": 1,
+                "rejectedTakeId": "string",
+                "idempotencyKey": "string",
+                "reason": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/manifests": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Create an immutable ordered manifest of all approved required Shots",
+        "description": "Requires edit.manage (Liam) bound to a live attempt; verifies actual bytes and dependencies but is not CEO release approval.. Identity comes only from the authenticated server-side Video Production capability, scoped to this project and a live execution attempt. CEO session access is read-only. No request-body actor identity is trusted.",
+        "operationId": "videoProductionRegistry_post_manifests",
+        "security": [
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Persisted registry result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, metadata, version or media bytes."
+          },
+          "401": {
+            "description": "Missing, expired, revoked, wrong-project or attempt-stale identity."
+          },
+          "403": {
+            "description": "Identity role or action is not permitted."
+          },
+          "404": {
+            "description": "Project or registry item not found."
+          },
+          "409": {
+            "description": "Version, dependency, approval or idempotency conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Existing credential/isolation gate is closed or storage is unavailable."
+          }
+        }
       }
     }
   }

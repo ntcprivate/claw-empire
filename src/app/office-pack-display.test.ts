@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Agent, Department } from "../types";
-import { resolvePackAgentViews, resolvePackDepartmentsForDisplay } from "./office-pack-display";
+import { resolvePackAgentViews, resolvePackDepartmentsForDisplay, videoProductionAgentsFromDatabase, videoProductionDepartmentsFromDatabase } from "./office-pack-display";
 
 function makeAgent(input: Partial<Agent> & { id: string; name: string; name_ko: string }): Agent {
   return {
@@ -182,5 +182,17 @@ describe("office pack display helpers", () => {
     expect(mergedAgents.some((agent) => agent.id === "novel-seed-1")).toBe(true);
     expect(mergedAgents.some((agent) => agent.id === "report-seed-1")).toBe(false);
     expect(mergedAgents.some((agent) => agent.id === "dev-leader")).toBe(true);
+  });
+
+  it("keeps server-backed Video Production records out of legacy office views and uses only pack department rows", () => {
+    const studioAgent = makeAgent({ id: "video_production-role-director", name: "Rian", name_ko: "Rian", workflow_pack_key: "video_production" });
+    const legacyAgent = makeAgent({ id: "legacy-agent", name: "Legacy", name_ko: "Legacy", workflow_pack_key: "development" });
+    expect(videoProductionAgentsFromDatabase([studioAgent, legacyAgent])).toEqual([studioAgent]);
+    const legacyMerged = resolvePackAgentViews({ packKey: "development", globalAgents: [studioAgent, legacyAgent] });
+    expect(legacyMerged.scopedAgents).toEqual([legacyAgent]);
+    expect(resolvePackAgentViews({ packKey: "report", globalAgents: [studioAgent, legacyAgent], packAgents: [] }).mergedAgents).toEqual([legacyAgent]);
+    const studioDepartments = [makeDepartment({ id: "operations", name: "Production Management", name_ko: "제작 관리" })];
+    expect(videoProductionDepartmentsFromDatabase(studioDepartments)).toEqual(studioDepartments);
+    expect(videoProductionDepartmentsFromDatabase([])).toEqual([]);
   });
 });

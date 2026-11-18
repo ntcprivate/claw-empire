@@ -171,20 +171,32 @@ describe("auth helpers", () => {
 });
 
 describe("installSecurityMiddleware", () => {
-  it("세션 발급 후 보호 API 접근을 허용한다", async () => {
+  it("bare loopback은 세션/CEO 권한을 받지 않고, 명시적 bearer는 보호 API에 접근한다", async () => {
     const app = express();
     installSecurityMiddleware(app);
     app.get("/api/protected", (_req, res) => {
       res.json({ ok: true });
     });
+    app.post("/api/protected", (_req, res) => {
+      res.json({ ok: true });
+    });
 
     await request(app).get("/api/protected").expect(401);
+    await request(app).post("/api/protected").set("x-csrf-token", getCsrfToken()).expect(401);
 
-    const sessionRes = await request(app).get("/api/auth/session").expect(200);
+    await request(app).get("/api/auth/session").expect(401);
+    const sessionRes = await request(app)
+      .get("/api/auth/session")
+      .set("Authorization", `Bearer ${SESSION_AUTH_TOKEN}`)
+      .expect(200);
     const cookieHeader = sessionRes.headers["set-cookie"]?.[0];
     expect(cookieHeader).toContain(`${SESSION_COOKIE_NAME}=`);
     expect(sessionRes.body?.csrf_token).toBeTypeOf("string");
 
-    await request(app).get("/api/protected").set("Cookie", String(cookieHeader)).expect(200, { ok: true });
+    await request(app)
+      .get("/api/protected")
+      .set("Authorization", `Bearer ${SESSION_AUTH_TOKEN}`)
+      .set("Cookie", String(cookieHeader))
+      .expect(200, { ok: true });
   });
 });

@@ -257,6 +257,9 @@ function ensureOfficePackScopedDepartmentSchema(db: DbLike): void {
   for (const [rawPackKey, rawProfile] of Object.entries(root)) {
     const packKey = normalizeText(rawPackKey);
     if (!isWorkflowPackKey(packKey) || packKey === DEFAULT_WORKFLOW_PACK_KEY) continue;
+    // Video Production has a server-owned organization. Legacy editable profiles
+    // must not relabel its agents or replace pack-scoped department metadata.
+    if (packKey === "video_production") continue;
     const profile = asObject(rawProfile);
     if (!profile) continue;
 
