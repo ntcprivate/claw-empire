@@ -118,6 +118,18 @@ function getWorker(): ChildProcessWithoutNullStreams {
   return child;
 }
 
+/** Fail before an upstream language-model request if the local offline TTS runtime is absent. */
+export function assertVieNeuRuntimeReady(): void {
+  const model = process.env.VIE_NEU_MODEL_DIR?.trim() || path.join(runtimeDirectory, "model");
+  if (!existsSync(path.join(model, "config.json"))) throw new VieNeuTtsError("model_not_found");
+  const python = process.env.VIE_NEU_PYTHON?.trim() || path.join(
+    runtimeDirectory,
+    ".venv",
+    ...(process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]),
+  );
+  if (!existsSync(python)) throw new VieNeuTtsError("unavailable");
+}
+
 function requestSynthesis(text: string, voice: VieNeuVoice, speed: number, signal: AbortSignal) {
   if (signal.aborted) throw new VieNeuTtsError("timeout");
   const child = getWorker();

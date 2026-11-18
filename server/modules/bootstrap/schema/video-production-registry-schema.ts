@@ -344,6 +344,129 @@ export function ensureVideoProductionRegistrySchema(db: Db): void {
       FOREIGN KEY(project_id, shot_id, shot_version, take_id, asset_id) REFERENCES video_production_takes(project_id, shot_id, shot_version, take_id, asset_id)
     );
 
+    CREATE TABLE IF NOT EXISTS video_production_stage_artifacts (
+      project_id TEXT NOT NULL REFERENCES video_productions(project_id) ON DELETE CASCADE,
+      artifact_id TEXT NOT NULL,
+      stage_key TEXT NOT NULL,
+      artifact_type TEXT NOT NULL CHECK(artifact_type IN ('screenplay','shot_spec','continuity_package','timeline_plan','remotion_source','audio_cues','timeline_source','final_cut','qa_evidence')),
+      shot_id TEXT,
+      shot_version INTEGER,
+      content_sha256 TEXT NOT NULL CHECK(length(content_sha256)=64),
+      content_text TEXT NOT NULL CHECK(length(content_text)<=1048576),
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_by_agent_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      attempt_id TEXT NOT NULL,
+      attempt_plan_version INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY(project_id,artifact_id),
+      CHECK((shot_id IS NULL AND shot_version IS NULL) OR (shot_id IS NOT NULL AND shot_version IS NOT NULL)),
+      FOREIGN KEY(project_id,task_id,created_by_agent_id,attempt_id,attempt_plan_version)
+        REFERENCES video_production_attempts(project_id,task_id,assigned_agent_id,attempt_id,plan_version),
+      FOREIGN KEY(project_id,shot_id,shot_version)
+        REFERENCES video_production_shot_versions(project_id,shot_id,version)
+    );
+    CREATE TABLE IF NOT EXISTS video_production_stage_decisions (
+      project_id TEXT NOT NULL REFERENCES video_productions(project_id) ON DELETE CASCADE,
+      decision_id TEXT NOT NULL,
+      stage_key TEXT NOT NULL,
+      target_artifact_id TEXT NOT NULL,
+      target_sha256 TEXT NOT NULL CHECK(length(target_sha256)=64),
+      decision TEXT NOT NULL CHECK(decision IN ('approved','changes_requested')),
+      feedback TEXT NOT NULL CHECK(length(feedback)<=5000),
+      reviewer_agent_id TEXT NOT NULL REFERENCES agents(id),
+      task_id TEXT NOT NULL,
+      attempt_id TEXT NOT NULL,
+      attempt_plan_version INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY(project_id,decision_id),
+      UNIQUE(attempt_id),
+      FOREIGN KEY(project_id,target_artifact_id) REFERENCES video_production_stage_artifacts(project_id,artifact_id),
+      FOREIGN KEY(project_id,task_id,reviewer_agent_id,attempt_id,attempt_plan_version)
+        REFERENCES video_production_attempts(project_id,task_id,assigned_agent_id,attempt_id,plan_version)
+    );
+    CREATE TABLE IF NOT EXISTS video_production_final_releases (
+      project_id TEXT NOT NULL REFERENCES video_productions(project_id) ON DELETE CASCADE,
+      release_id TEXT NOT NULL,
+      plan_version INTEGER NOT NULL,
+      final_asset_id TEXT NOT NULL,
+      final_asset_sha256 TEXT NOT NULL CHECK(length(final_asset_sha256)=64),
+      manifest_id TEXT NOT NULL,
+      manifest_digest TEXT NOT NULL CHECK(length(manifest_digest)=64),
+      timeline_artifact_id TEXT NOT NULL,
+      timeline_sha256 TEXT NOT NULL CHECK(length(timeline_sha256)=64),
+      timeline_source_artifact_id TEXT NOT NULL,
+      timeline_source_sha256 TEXT NOT NULL CHECK(length(timeline_source_sha256)=64),
+      audio_artifact_id TEXT NOT NULL,
+      audio_cues_sha256 TEXT NOT NULL CHECK(length(audio_cues_sha256)=64),
+      audio_asset_id TEXT NOT NULL,
+      audio_sha256 TEXT NOT NULL CHECK(length(audio_sha256)=64),
+      director_artifact_id TEXT NOT NULL,
+      director_decision_id TEXT NOT NULL,
+      qa_artifact_id TEXT NOT NULL,
+      qa_artifact_sha256 TEXT NOT NULL CHECK(length(qa_artifact_sha256)=64),
+      qa_decision_id TEXT NOT NULL,
+      released_by TEXT NOT NULL,
+      released_at INTEGER NOT NULL,
+      evidence_json TEXT NOT NULL CHECK(json_valid(evidence_json)),
+      PRIMARY KEY(project_id,release_id),
+      UNIQUE(project_id,plan_version),
+      FOREIGN KEY(project_id,plan_version) REFERENCES video_production_plan_versions(project_id,version),
+      FOREIGN KEY(project_id,final_asset_id) REFERENCES video_production_assets(project_id,asset_id),
+      FOREIGN KEY(project_id,manifest_id) REFERENCES video_production_manifests(project_id,manifest_id),
+      FOREIGN KEY(project_id,timeline_artifact_id) REFERENCES video_production_stage_artifacts(project_id,artifact_id),
+      FOREIGN KEY(project_id,timeline_source_artifact_id) REFERENCES video_production_stage_artifacts(project_id,artifact_id),
+      FOREIGN KEY(project_id,audio_artifact_id) REFERENCES video_production_stage_artifacts(project_id,artifact_id),
+      FOREIGN KEY(project_id,audio_asset_id) REFERENCES video_production_assets(project_id,asset_id),
+      FOREIGN KEY(project_id,director_artifact_id) REFERENCES video_production_stage_artifacts(project_id,artifact_id),
+      FOREIGN KEY(project_id,director_decision_id) REFERENCES video_production_stage_decisions(project_id,decision_id),
+      FOREIGN KEY(project_id,qa_artifact_id) REFERENCES video_production_stage_artifacts(project_id,artifact_id),
+      FOREIGN KEY(project_id,qa_decision_id) REFERENCES video_production_stage_decisions(project_id,decision_id)
+    );
+    CREATE TRIGGER IF NOT EXISTS trg_video_prod_stage_job_target_artifact_insert
+    BEFORE INSERT ON video_production_stage_jobs WHEN NEW.target_artifact_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM video_production_stage_artifacts a WHERE a.project_id=NEW.project_id AND a.artifact_id=NEW.target_artifact_id
+    ) BEGIN SELECT RAISE(ABORT, 'stage_job_target_artifact_mismatch'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_video_prod_stage_job_target_artifact_update
+    BEFORE UPDATE OF project_id,target_artifact_id ON video_production_stage_jobs
+    WHEN OLD.target_artifact_id IS NOT NULL AND (NEW.project_id!=OLD.project_id OR NEW.target_artifact_id!=OLD.target_artifact_id)
+    BEGIN SELECT RAISE(ABORT, 'stage_job_target_artifact_immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_video_prod_stage_job_take_pin_insert
+    BEFORE INSERT ON video_production_stage_jobs WHEN
+      ((NEW.target_take_id IS NULL OR NEW.target_asset_id IS NULL OR NEW.target_asset_sha256 IS NULL)
+       AND NOT (NEW.target_take_id IS NULL AND NEW.target_asset_id IS NULL AND NEW.target_asset_sha256 IS NULL))
+      OR (NEW.target_take_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM video_production_takes t JOIN video_production_assets a ON a.project_id=t.project_id AND a.asset_id=t.asset_id
+        WHERE t.project_id=NEW.project_id AND t.take_id=NEW.target_take_id AND t.shot_id=NEW.shot_id
+          AND t.shot_version=NEW.shot_version AND t.asset_id=NEW.target_asset_id AND a.sha256=NEW.target_asset_sha256
+      )) BEGIN SELECT RAISE(ABORT, 'stage_job_take_pin_mismatch'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_video_prod_stage_job_take_pin_update
+    BEFORE UPDATE OF target_take_id,target_asset_id,target_asset_sha256 ON video_production_stage_jobs
+    WHEN OLD.target_take_id IS NOT NULL AND (NEW.target_take_id IS NOT OLD.target_take_id OR NEW.target_asset_id IS NOT OLD.target_asset_id OR NEW.target_asset_sha256 IS NOT OLD.target_asset_sha256)
+    BEGIN SELECT RAISE(ABORT, 'stage_job_take_pin_immutable'); END;
+    DROP TRIGGER IF EXISTS trg_video_prod_stage_decision_target_hash_insert;
+    CREATE TRIGGER trg_video_prod_stage_decision_target_hash_insert
+    BEFORE INSERT ON video_production_stage_decisions WHEN NOT EXISTS (
+      SELECT 1 FROM video_production_stage_artifacts a WHERE a.project_id=NEW.project_id AND a.artifact_id=NEW.target_artifact_id
+        AND a.content_sha256=NEW.target_sha256 AND (a.stage_key=NEW.stage_key OR
+          (a.artifact_type='final_cut' AND a.stage_key='asset_handoff_rough_cut' AND NEW.stage_key='director_review'))
+    ) BEGIN SELECT RAISE(ABORT, 'stage_decision_target_mismatch'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_video_prod_stage_decisions_no_update
+    BEFORE UPDATE ON video_production_stage_decisions BEGIN SELECT RAISE(ABORT, 'stage_decisions_are_immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_video_prod_stage_decisions_no_delete
+    BEFORE DELETE ON video_production_stage_decisions WHEN EXISTS(SELECT 1 FROM video_productions WHERE project_id=OLD.project_id)
+    BEGIN SELECT RAISE(ABORT, 'stage_decisions_are_immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_video_prod_final_releases_no_update
+    BEFORE UPDATE ON video_production_final_releases BEGIN SELECT RAISE(ABORT, 'final_releases_are_immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_video_prod_final_release_source_insert
+    BEFORE INSERT ON video_production_final_releases WHEN NOT EXISTS (
+      SELECT 1 FROM video_production_stage_artifacts a WHERE a.project_id=NEW.project_id AND a.artifact_id=NEW.timeline_source_artifact_id
+        AND a.artifact_type='timeline_source' AND a.content_sha256=NEW.timeline_source_sha256
+    ) BEGIN SELECT RAISE(ABORT, 'final_release_timeline_source_mismatch'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_video_prod_final_releases_no_delete
+    BEFORE DELETE ON video_production_final_releases WHEN EXISTS(SELECT 1 FROM video_productions WHERE project_id=OLD.project_id)
+    BEGIN SELECT RAISE(ABORT, 'final_releases_are_immutable'); END;
+
     CREATE INDEX IF NOT EXISTS idx_video_prod_assets_shot
       ON video_production_assets(project_id, shot_id, shot_version, asset_type);
     CREATE INDEX IF NOT EXISTS idx_video_prod_takes_shot
@@ -365,6 +488,13 @@ export function ensureVideoProductionRegistrySchema(db: Db): void {
   }
   if (!credentialColumns.some((column) => column.name === "plan_version")) {
     db.exec("ALTER TABLE video_production_agent_credentials ADD COLUMN plan_version INTEGER");
+  }
+  const releaseColumns = db.prepare("PRAGMA table_info(video_production_final_releases)").all() as Array<{ name: string }>;
+  if (!releaseColumns.some((column) => column.name === "timeline_source_artifact_id")) {
+    db.exec("ALTER TABLE video_production_final_releases ADD COLUMN timeline_source_artifact_id TEXT NOT NULL DEFAULT ''");
+  }
+  if (!releaseColumns.some((column) => column.name === "timeline_source_sha256")) {
+    db.exec("ALTER TABLE video_production_final_releases ADD COLUMN timeline_source_sha256 TEXT NOT NULL DEFAULT ''");
   }
 
   db.exec(`
@@ -415,6 +545,11 @@ export function ensureVideoProductionRegistrySchema(db: Db): void {
     CREATE TRIGGER IF NOT EXISTS trg_video_prod_manifest_entries_no_delete
     BEFORE DELETE ON video_production_manifest_entries WHEN EXISTS(SELECT 1 FROM video_productions WHERE project_id=OLD.project_id)
     BEGIN SELECT RAISE(ABORT, 'manifest_entries_are_immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_video_prod_stage_artifacts_no_update
+    BEFORE UPDATE ON video_production_stage_artifacts BEGIN SELECT RAISE(ABORT, 'stage_artifacts_are_immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_video_prod_stage_artifacts_no_delete
+    BEFORE DELETE ON video_production_stage_artifacts WHEN EXISTS(SELECT 1 FROM video_productions WHERE project_id=OLD.project_id)
+    BEGIN SELECT RAISE(ABORT, 'stage_artifacts_are_immutable'); END;
     CREATE TRIGGER IF NOT EXISTS trg_video_prod_regeneration_requests_no_delete
     BEFORE DELETE ON video_production_regeneration_requests WHEN EXISTS(SELECT 1 FROM video_productions WHERE project_id=OLD.project_id)
     BEGIN SELECT RAISE(ABORT, 'regeneration_requests_are_immutable'); END;

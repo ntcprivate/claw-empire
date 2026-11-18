@@ -352,7 +352,7 @@ export function registerRoutesPartA(ctx: RuntimeContext): Record<string, never> 
     runInTransaction,
     nowMs,
   });
-  registerVideoProductionRoutes({ app, db, broadcast, activeProcesses, stopProgressTimer });
+  registerVideoProductionRoutes({ app, db, broadcast, activeProcesses, stopProgressTimer, handleTaskRunComplete: __ctx.handleTaskRunComplete, scheduleVideoProductionAutoRun: __ctx.scheduleVideoProductionAutoRun });
 
   // ---------------------------------------------------------------------------
   // Agents

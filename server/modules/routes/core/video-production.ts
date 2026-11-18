@@ -3,19 +3,38 @@ import { getVideoProductionAuthenticatedAgent, hasValidCsrfToken, isAuthenticate
 import type { RuntimeContext } from "../../../types/runtime-context.ts";
 import {
   decideVideoProduction,
+  createVideoProductionShotRenderJob,
+  createVideoProductionTakeReviewJob,
+  claimVideoProductionAttemptForRecovery,
+  beginVideoProductionCompletion,
+  createVideoProductionScreenplayJob,
+  createVideoProductionCreativeReviewJob,
+  createVideoProductionScreenplayRevisionJob,
+  createVideoProductionShotSpecJob,
+  createVideoProductionContinuityJob,
+  createVideoProductionTimelinePlanJob,
+  createVideoProductionAudioCueJob,
   getVideoProduction,
+  markVideoProductionAttemptReconciliationRequired,
+  requireOwnedVideoProductionAttempt,
   saveVideoProductionPlan,
   VideoProductionPolicyError,
 } from "../../workflow/video-production.ts";
 import type { VideoProductionSnapshot } from "../../../../shared/video-production.ts";
-import { isWorkerIsolationReady } from "../../workflow/worker-isolation.ts";
-import { cancelVideoProductionAttempt, isVideoProductionChildForAttempt } from "../../workflow/video-production-execution.ts";
+import { createNextVideoProductionStageJob } from "../../workflow/video-production-dispatch.ts";
+import { resumeVideoProductionAutoRun } from "../../workflow/video-production-auto-run.ts";
+import { cleanupVerifiedWorkerWorkspacePath, inspectWorkerContainer, isWorkerIsolationReady, probeWorkerIsolation } from "../../workflow/worker-isolation.ts";
+import { cancelVideoProductionAttempt, isVideoProductionChildForAttempt, requestVideoProductionProviderAbort } from "../../workflow/video-production-execution.ts";
+import { importMiroWorkerOutput } from "../../workflow/video-production-stage-runner.ts";
+import { importLiamWorkerOutput } from "../../workflow/video-production-final-render.ts";
 import {
   grantVideoProductionProjectAgent, listVideoStudioProfiles, recordVideoProductionEvent,
   revokeVideoProductionProjectAgent, seedVideoProductionOrganization,
 } from "../../workflow/video-production-rbac.ts";
 import { VIDEO_STUDIO_STAGE_OWNERSHIP } from "../../../../shared/video-studio-organization.ts";
 import { registerVideoProductionRegistryRoutes } from "./video-production-registry.ts";
+import { releaseVideoProductionFinalCut } from "../../workflow/video-production-release.ts";
+import { VIDEO_PRODUCTION_ASSET_ROOT } from "../../../config/runtime.ts";
 
 export function publishVideoProductionUpdate(
   ctx: Pick<RuntimeContext, "db" | "broadcast">,
@@ -72,7 +91,7 @@ export function respondVideoProductionError(res: Response, error: unknown): void
 }
 
 type VideoProductionRouteContext = Pick<RuntimeContext, "app" | "db" | "broadcast"> &
-  Partial<Pick<RuntimeContext, "activeProcesses" | "stopProgressTimer">>;
+  Partial<Pick<RuntimeContext, "activeProcesses" | "stopProgressTimer" | "handleTaskRunComplete" | "scheduleVideoProductionAutoRun">>;
 
 export function registerVideoProductionRoutes(ctx: VideoProductionRouteContext): void {
   registerVideoProductionRegistryRoutes(ctx);
@@ -159,6 +178,26 @@ export function registerVideoProductionRoutes(ctx: VideoProductionRouteContext):
     if (!requireVideoProductionCeo(req, res)) return;
     res.json({ production: getVideoProduction(db, String(req.params.id)) });
   });
+  app.post("/api/projects/:id/video-production/release", async (req, res) => {
+    if (!requireVideoProductionCeo(req, res)) return;
+    try {
+      const expected = req.body?.expected;
+      if (!expected || typeof expected !== "object") return res.status(400).json({ error: "final_release_confirmation_required" });
+      const result = await releaseVideoProductionFinalCut(db, String(req.params.id), "ceo_session", {
+        finalCutArtifactId: String(expected.finalCutArtifactId ?? ""),
+        finalAssetId: String(expected.finalAssetId ?? ""), finalAssetSha256: String(expected.finalAssetSha256 ?? ""),
+        manifestId: String(expected.manifestId ?? ""), manifestDigest: String(expected.manifestDigest ?? ""),
+        timelineArtifactId: String(expected.timelineArtifactId ?? ""), timelineSha256: String(expected.timelineSha256 ?? ""),
+        timelineSourceArtifactId: String(expected.timelineSourceArtifactId ?? ""), timelineSourceSha256: String(expected.timelineSourceSha256 ?? ""),
+        audioCuesArtifactId: String(expected.audioCuesArtifactId ?? ""), audioAssetId: String(expected.audioAssetId ?? ""), audioSha256: String(expected.audioSha256 ?? ""),
+        directorDecisionId: String(expected.directorDecisionId ?? ""), qaArtifactId: String(expected.qaArtifactId ?? ""),
+        qaArtifactSha256: String(expected.qaArtifactSha256 ?? ""), qaDecisionId: String(expected.qaDecisionId ?? ""),
+      }, VIDEO_PRODUCTION_ASSET_ROOT);
+      broadcast("tasks_changed", {});
+      broadcast("video_production_registry_changed", { projectId: String(req.params.id) });
+      return res.status(result.idempotent ? 200 : 201).json(result);
+    } catch (error) { return respondVideoProductionError(res, error); }
+  });
   app.put("/api/projects/:id/video-production/plan", (req, res) => {
     const projectId = String(req.params.id);
     const actor = agentFor(req, projectId, "plan.update");
@@ -218,6 +257,164 @@ export function registerVideoProductionRoutes(ctx: VideoProductionRouteContext):
       res.json({ task: run });
     } catch (error) { respondVideoProductionError(res, error); }
   });
+  app.post("/api/projects/:id/video-production/stage-jobs", (req, res) => {
+    const projectId = String(req.params.id);
+    const actor = agentFor(req, projectId, "task.assign");
+    if (!actor && !requireVideoProductionCeo(req, res)) return;
+    const worker = probeWorkerIsolation();
+    if (!worker.ready || !worker.phase4Ready) return res.status(503).json({ error: "phase4_worker_runner_not_verified", retryable: false });
+    try {
+      const action = req.body?.action;
+      if (!(["screenplay.write", "screenplay.revise", "shot_spec.write", "visual.manage", "edit.manage", "audio.manage", "creative.approve", "footage.submit", "take.review"] as unknown[]).includes(action)) {
+        throw new VideoProductionPolicyError("production_stage_action_not_implemented", 501);
+      }
+      const job = action === "screenplay.write"
+        ? createVideoProductionScreenplayJob(db, {
+            projectId,
+            agentId: String(req.body?.agent_id ?? ""),
+            idempotencyKey: String(req.body?.idempotency_key ?? ""),
+            createdBy: actor?.agentId ?? "ceo_session",
+          })
+        : req.body?.action === "creative.approve"
+          ? createVideoProductionCreativeReviewJob(db, {
+              projectId,
+              artifactId: String(req.body?.artifact_id ?? ""),
+              agentId: String(req.body?.agent_id ?? ""),
+              idempotencyKey: String(req.body?.idempotency_key ?? ""),
+              createdBy: actor?.agentId ?? "ceo_session",
+            })
+          : req.body?.action === "screenplay.revise"
+            ? createVideoProductionScreenplayRevisionJob(db, {
+                projectId,
+                artifactId: String(req.body?.artifact_id ?? ""),
+                agentId: String(req.body?.agent_id ?? ""),
+                idempotencyKey: String(req.body?.idempotency_key ?? ""),
+                createdBy: actor?.agentId ?? "ceo_session",
+              })
+            : req.body?.action === "shot_spec.write"
+              ? createVideoProductionShotSpecJob(db, {
+                  projectId,
+                  screenplayArtifactId: String(req.body?.artifact_id ?? ""),
+                  agentId: String(req.body?.agent_id ?? ""),
+                  idempotencyKey: String(req.body?.idempotency_key ?? ""),
+                  createdBy: actor?.agentId ?? "ceo_session",
+                })
+              : req.body?.action === "visual.manage"
+                ? createVideoProductionContinuityJob(db, {
+                    projectId,
+                    shotSpecArtifactId: String(req.body?.artifact_id ?? ""),
+                    agentId: String(req.body?.agent_id ?? ""),
+                    idempotencyKey: String(req.body?.idempotency_key ?? ""),
+                    createdBy: actor?.agentId ?? "ceo_session",
+                  })
+                : req.body?.action === "edit.manage"
+                  ? createVideoProductionTimelinePlanJob(db, {
+                      projectId,
+                      continuityArtifactId: String(req.body?.artifact_id ?? ""),
+                      agentId: String(req.body?.agent_id ?? ""),
+                      idempotencyKey: String(req.body?.idempotency_key ?? ""),
+                      createdBy: actor?.agentId ?? "ceo_session",
+                    })
+                  : req.body?.action === "audio.manage"
+                    ? createVideoProductionAudioCueJob(db, {
+                        projectId,
+                        screenplayArtifactId: String(req.body?.artifact_id ?? ""),
+                        agentId: String(req.body?.agent_id ?? ""),
+                        idempotencyKey: String(req.body?.idempotency_key ?? ""),
+                        createdBy: actor?.agentId ?? "ceo_session",
+                      })
+            : action === "take.review"
+              ? createVideoProductionTakeReviewJob(db, {
+                  projectId,
+                  shotId: String(req.body?.shot_id ?? ""),
+                  shotVersion: req.body?.shot_version,
+                  agentId: String(req.body?.agent_id ?? ""),
+                  idempotencyKey: String(req.body?.idempotency_key ?? ""),
+                  createdBy: actor?.agentId ?? "ceo_session",
+                })
+            : action === "footage.submit"
+              ? createVideoProductionShotRenderJob(db, {
+            projectId,
+            shotId: String(req.body?.shot_id ?? ""),
+            shotVersion: req.body?.shot_version,
+            agentId: String(req.body?.agent_id ?? ""),
+            idempotencyKey: String(req.body?.idempotency_key ?? ""),
+            createdBy: actor?.agentId ?? "ceo_session",
+              })
+              : (() => { throw new VideoProductionPolicyError("production_stage_action_not_implemented", 501); })();
+      const task = db.prepare("SELECT * FROM tasks WHERE id=?").get(job.taskId);
+      broadcast("task_update", task);
+      broadcast("tasks_changed", {});
+      res.status(201).json({ job, task });
+    } catch (error) { respondVideoProductionError(res, error); }
+  });
+  app.post("/api/projects/:id/video-production/next-job", (req, res) => {
+    const projectId = String(req.params.id);
+    const actor = agentFor(req, projectId, "task.assign");
+    if (!actor && !requireVideoProductionCeo(req, res)) return;
+    const worker = probeWorkerIsolation();
+    if (!worker.ready || !worker.phase4Ready) return res.status(503).json({ error: "phase4_worker_runner_not_verified", retryable: false });
+    try {
+      const job = createNextVideoProductionStageJob(db, projectId, actor?.agentId ?? "ceo_session");
+      const task = db.prepare("SELECT * FROM tasks WHERE id=?").get(job.taskId);
+      broadcast("task_update", task);
+      broadcast("tasks_changed", {});
+      return res.status(201).json({ job, task });
+    } catch (error) { return respondVideoProductionError(res, error); }
+  });
+  app.post("/api/tasks/:id/video-production/reconcile", async (req, res) => {
+    if (!requireVideoProductionCeo(req, res)) return;
+    const taskId = String(req.params.id);
+    const attemptId = typeof req.body?.attempt_id === "string" ? req.body.attempt_id.trim() : "";
+    if (!attemptId || !ctx.handleTaskRunComplete) return res.status(400).json({ error: "reconciliation_attempt_required" });
+    const attempt = db.prepare(`SELECT a.attempt_id,a.state,a.worker_kind,a.worker_identity,a.image_id,a.workspace_path,a.project_id,a.worker_input_digest,
+        j.stage_key,j.execution_action,j.shot_id,j.shot_version
+      FROM video_production_attempts a JOIN video_production_stage_jobs j ON j.task_id=a.task_id
+      WHERE a.task_id=? AND a.attempt_id=?`).get(taskId, attemptId) as
+        | { attempt_id: string; state: string; worker_kind: string; worker_identity: string | null; image_id: string | null; workspace_path: string | null; project_id: string; worker_input_digest: string | null; stage_key: string; execution_action: string; shot_id: string | null; shot_version: number | null }
+        | undefined;
+    const isMiro = attempt?.worker_kind === "phase4_remotion" && attempt.stage_key === "ai_footage_production" && attempt.execution_action === "footage.submit";
+    const isLiam = attempt?.worker_kind === "phase4_remotion" && attempt.stage_key === "asset_handoff_rough_cut" && attempt.execution_action === "edit.manage" && Boolean(attempt.worker_input_digest);
+    if (!attempt || (!isMiro && !isLiam)) {
+      return res.status(404).json({ error: "phase4_attempt_not_found" });
+    }
+    if (attempt.state === "COMPLETED") {
+      const submitted = isMiro
+        ? db.prepare("SELECT 1 FROM video_production_takes WHERE project_id=? AND shot_id=? AND shot_version=? AND attempt_id=? LIMIT 1").get(attempt.project_id, attempt.shot_id, attempt.shot_version, attemptId)
+        : db.prepare("SELECT 1 FROM video_production_stage_artifacts WHERE project_id=? AND attempt_id=? AND artifact_type='final_cut' AND stage_key='asset_handoff_rough_cut' LIMIT 1").get(attempt.project_id, attemptId);
+      if (submitted) return res.json({ ok: true, alreadyReconciled: true });
+      return res.status(409).json({ error: "phase4_completed_attempt_missing_import" });
+    }
+    if (!requireOwnedVideoProductionAttempt(db, taskId, attemptId) || attempt.state !== "RECONCILIATION_REQUIRED" || !attempt.worker_identity || !attempt.image_id || !attempt.workspace_path) {
+      return res.status(409).json({ error: "phase4_attempt_not_reconcilable" });
+    }
+    const inspected = inspectWorkerContainer(attempt.worker_identity, attemptId, attempt.image_id, attempt.workspace_path, "phase4-v1");
+    if (!inspected.verified || inspected.state !== "exited" || inspected.exitCode !== 0) {
+      return res.status(409).json({ error: "phase4_worker_exit_not_verified" });
+    }
+    if (!claimVideoProductionAttemptForRecovery(db, taskId, attemptId, isLiam ? "edit.manage" : "footage.submit")) {
+      return res.status(409).json({ error: "phase4_recovery_claim_conflict" });
+    }
+    if (!beginVideoProductionCompletion(db, taskId, attemptId)) return res.status(409).json({ error: "phase4_recovery_claim_conflict" });
+    try {
+      if (isLiam) await importLiamWorkerOutput({ db, taskId, attemptId, workspacePath: attempt.workspace_path });
+      else await importMiroWorkerOutput({ db, taskId, attemptId, workspacePath: attempt.workspace_path });
+      ctx.handleTaskRunComplete(taskId, 0, attemptId, true);
+      const settled = db.prepare("SELECT state FROM video_production_attempts WHERE task_id=? AND attempt_id=?").get(taskId, attemptId) as { state: string } | undefined;
+      if (settled?.state === "COMPLETED") {
+        cleanupVerifiedWorkerWorkspacePath(attempt.workspace_path);
+        resumeVideoProductionAutoRun(db, taskId);
+        ctx.scheduleVideoProductionAutoRun?.();
+        return res.json({ ok: true, reconciled: true });
+      }
+      markVideoProductionAttemptReconciliationRequired(db, taskId, attemptId, { reason: "restart_completion_commit_unconfirmed" });
+      return res.status(409).json({ error: "phase4_completion_commit_failed" });
+    } catch (error) {
+      markVideoProductionAttemptReconciliationRequired(db, taskId, attemptId, { reason: "restart_output_validation_failed" });
+      if (error instanceof VideoProductionPolicyError) return res.status(error.status).json({ error: error.code });
+      return res.status(409).json({ error: "phase4_output_validation_failed" });
+    }
+  });
   app.post("/api/projects/:id/video-production/decision", (req, res) => {
     if (!requireVideoProductionCeo(req, res)) return;
     try {
@@ -228,6 +425,7 @@ export function registerVideoProductionRoutes(ctx: VideoProductionRouteContext):
         note: req.body?.note,
         actorId: "ceo_session",
       });
+      ctx.scheduleVideoProductionAutoRun?.();
       res.json({ production: publish(projectId) });
     } catch (error) {
       respondVideoProductionError(res, error);
@@ -240,9 +438,26 @@ export function registerVideoProductionRoutes(ctx: VideoProductionRouteContext):
     if (!attemptId) return res.status(400).json({ error: "production_attempt_id_required" });
     try {
       const activeChild = activeProcesses?.get(taskId);
-      const attempt = db.prepare("SELECT assigned_agent_id FROM video_production_attempts WHERE task_id=? AND attempt_id=?").get(taskId, attemptId) as { assigned_agent_id: string | null } | undefined;
+      const attempt = db.prepare("SELECT assigned_agent_id,worker_kind,state,detail_json FROM video_production_attempts WHERE task_id=? AND attempt_id=?").get(taskId, attemptId) as { assigned_agent_id: string | null; worker_kind: string; state: string; detail_json: string } | undefined;
+      if (attempt?.worker_kind === "phase4_provider_broker") {
+        if (attempt.state === "PAUSED") return res.json({ ok: true, cancelled: true, alreadyCancelled: true, status: "pending" });
+        if (!requireOwnedVideoProductionAttempt(db, taskId, attemptId) || attempt.state !== "RUNNING") return res.status(409).json({ error: "production_attempt_not_owned" });
+        let detail: Record<string, unknown> = {};
+        try { detail = JSON.parse(attempt.detail_json) as Record<string, unknown>; } catch { return res.status(409).json({ error: "production_attempt_state_unverified" }); }
+        if (detail.cancelRequested === true) return res.status(202).json({ ok: true, cancelRequested: true, status: "stopping" });
+        if (!requestVideoProductionProviderAbort(taskId, attemptId)) return res.status(503).json({ error: "provider_attempt_not_locally_active", retryable: false });
+        db.prepare("UPDATE video_production_attempts SET detail_json=json_set(detail_json,'$.cancelRequested',1),updated_at=? WHERE task_id=? AND attempt_id=? AND state='RUNNING' AND EXISTS (SELECT 1 FROM video_production_slot WHERE singleton=1 AND task_id=? AND attempt_id=?)")
+          .run(Date.now(), taskId, attemptId, taskId, attemptId);
+        db.prepare("UPDATE video_production_auto_runs SET state='PAUSED',reason='ceo_cancelled',updated_at=? WHERE task_id=? AND state='RUNNING'")
+          .run(Date.now(), taskId);
+        return res.status(202).json({ ok: true, cancelRequested: true, status: "stopping" });
+      }
       const result = cancelVideoProductionAttempt({ db, taskId, attemptId });
+      ctx.scheduleVideoProductionAutoRun?.();
       if (!result.alreadyCancelled) {
+        requestVideoProductionProviderAbort(taskId, attemptId);
+        db.prepare("UPDATE video_production_auto_runs SET state='PAUSED',reason='ceo_cancelled',updated_at=? WHERE task_id=? AND state='RUNNING'")
+          .run(Date.now(), taskId);
         if (activeChild && isVideoProductionChildForAttempt(activeChild, attemptId)) activeProcesses?.delete(taskId);
         stopProgressTimer?.(taskId);
         broadcast("task_update", db.prepare("SELECT * FROM tasks WHERE id=?").get(taskId));

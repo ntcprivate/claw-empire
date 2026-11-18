@@ -10,7 +10,11 @@ import { VieNeuTtsError } from "../packs/vieneu-tts.ts";
 import {
   beginVideoProductionCompletion,
   finishVideoProductionAttempt,
+  finishVideoProductionCreativeDecision,
+  finishVideoProductionQaDecision,
+  finishVideoProductionRegenerationRequest,
   finishVideoProductionExecutionPendingReview,
+  finishVideoProductionVerifiedRoughCut,
   isManagedVideoProductionTask,
   requireOwnedVideoProductionAttempt,
 } from "../video-production.ts";
@@ -70,14 +74,98 @@ export function createRunCompleteHandler(deps: CreateRunCompleteHandlerDeps) {
 
   const voiceoverInFlight = new Set<string>();
 
-  function handleTaskRunComplete(taskId: string, exitCode: number, attemptId?: string): void {
+  function handleTaskRunComplete(taskId: string, exitCode: number, attemptId?: string, completionClaimed = false): void {
     const managedProduction = isManagedVideoProductionTask(db, taskId);
     if (managedProduction) {
       if (!attemptId || !requireOwnedVideoProductionAttempt(db, taskId, attemptId)) return;
       const current = db.prepare("SELECT status FROM tasks WHERE id=?").get(taskId) as { status: string } | undefined;
       if (current?.status !== "in_progress") return;
-      if (!beginVideoProductionCompletion(db, taskId, attemptId)) return;
+      if (completionClaimed) {
+        const attempt = db.prepare("SELECT state FROM video_production_attempts WHERE task_id=? AND attempt_id=?").get(taskId, attemptId) as { state: string } | undefined;
+        if (attempt?.state !== "COMPLETING") return;
+      } else if (!beginVideoProductionCompletion(db, taskId, attemptId)) return;
       if (exitCode === 0) {
+        const stageJob = db.prepare("SELECT stage_key,execution_action FROM video_production_stage_jobs WHERE task_id=?").get(taskId) as { stage_key: string; execution_action: string } | undefined;
+        if (stageJob?.stage_key === "asset_handoff_rough_cut" && stageJob.execution_action === "edit.manage") {
+          if (!finishVideoProductionVerifiedRoughCut(db, taskId, attemptId)) return;
+          activeProcesses.delete(taskId);
+          stopProgressTimer(taskId);
+          stopRequestedTasks.delete(taskId);
+          stopRequestModeByTask.delete(taskId);
+          const owner = db.prepare("SELECT assigned_agent_id FROM tasks WHERE id=?").get(taskId) as { assigned_agent_id: string | null } | undefined;
+          if (owner?.assigned_agent_id) {
+            db.prepare("UPDATE agents SET status='idle',current_task_id=NULL WHERE id=? AND current_task_id=?").run(owner.assigned_agent_id, taskId);
+            broadcast("agent_status", db.prepare("SELECT * FROM agents WHERE id=?").get(owner.assigned_agent_id));
+          }
+          appendTaskLog(taskId, "system", "Liam's rough cut passed media validation and was pinned to its shot manifest, timeline, and audio cue versions.");
+          broadcast("task_update", db.prepare("SELECT * FROM tasks WHERE id=?").get(taskId));
+          broadcast("tasks_changed", {});
+          return;
+        }
+        if (stageJob?.execution_action === "take.review") {
+          const review = db.prepare("SELECT 1 FROM video_production_take_reviews WHERE task_id=? AND attempt_id=? LIMIT 1").get(taskId, attemptId);
+          if (!review || !finishVideoProductionAttempt(db, taskId, attemptId, "completed", { outcome: "exact_take_review_recorded" })) return;
+          activeProcesses.delete(taskId);
+          stopProgressTimer(taskId);
+          stopRequestedTasks.delete(taskId);
+          stopRequestModeByTask.delete(taskId);
+          const owner = db.prepare("SELECT assigned_agent_id FROM tasks WHERE id=?").get(taskId) as { assigned_agent_id: string | null } | undefined;
+          if (owner?.assigned_agent_id) {
+            db.prepare("UPDATE agents SET status='idle',current_task_id=NULL WHERE id=? AND current_task_id=?").run(owner.assigned_agent_id, taskId);
+            broadcast("agent_status", db.prepare("SELECT * FROM agents WHERE id=?").get(owner.assigned_agent_id));
+          }
+          appendTaskLog(taskId, "system", "Yuna's sampled-frame decision was recorded against the pinned take and asset hash.");
+          broadcast("task_update", db.prepare("SELECT * FROM tasks WHERE id=?").get(taskId));
+          broadcast("tasks_changed", {});
+          return;
+        }
+        if (stageJob?.execution_action === "qa.final") {
+          if (!finishVideoProductionQaDecision(db, taskId, attemptId)) return;
+          activeProcesses.delete(taskId);
+          stopProgressTimer(taskId);
+          stopRequestedTasks.delete(taskId);
+          stopRequestModeByTask.delete(taskId);
+          const owner = db.prepare("SELECT assigned_agent_id FROM tasks WHERE id=?").get(taskId) as { assigned_agent_id: string | null } | undefined;
+          if (owner?.assigned_agent_id) {
+            db.prepare("UPDATE agents SET status='idle',current_task_id=NULL WHERE id=? AND current_task_id=?").run(owner.assigned_agent_id, taskId);
+            broadcast("agent_status", db.prepare("SELECT * FROM agents WHERE id=?").get(owner.assigned_agent_id));
+          }
+          appendTaskLog(taskId, "system", "Quinn's independent final QA decision was recorded against the exact final MP4 hash and release evidence pins.");
+          broadcast("task_update", db.prepare("SELECT * FROM tasks WHERE id=?").get(taskId));
+          broadcast("tasks_changed", {});
+          return;
+        }
+        if (stageJob?.execution_action === "regeneration.request") {
+          if (!finishVideoProductionRegenerationRequest(db, taskId, attemptId)) return;
+          activeProcesses.delete(taskId);
+          stopProgressTimer(taskId);
+          stopRequestedTasks.delete(taskId);
+          stopRequestModeByTask.delete(taskId);
+          const owner = db.prepare("SELECT assigned_agent_id FROM tasks WHERE id=?").get(taskId) as { assigned_agent_id: string | null } | undefined;
+          if (owner?.assigned_agent_id) {
+            db.prepare("UPDATE agents SET status='idle',current_task_id=NULL WHERE id=? AND current_task_id=?").run(owner.assigned_agent_id, taskId);
+            broadcast("agent_status", db.prepare("SELECT * FROM agents WHERE id=?").get(owner.assigned_agent_id));
+          }
+          appendTaskLog(taskId, "system", "Dami recorded a regeneration request for the exact rejected shot. Other approved shots remain unchanged.");
+          broadcast("task_update", db.prepare("SELECT * FROM tasks WHERE id=?").get(taskId));
+          broadcast("tasks_changed", {});
+          return;
+        }
+        if (stageJob?.execution_action === "creative.approve") {
+          if (!finishVideoProductionCreativeDecision(db, taskId, attemptId)) return;
+          activeProcesses.delete(taskId);
+          stopProgressTimer(taskId);
+          stopRequestedTasks.delete(taskId);
+          stopRequestModeByTask.delete(taskId);
+          const task = db.prepare("SELECT assigned_agent_id FROM tasks WHERE id=?").get(taskId) as { assigned_agent_id: string | null } | undefined;
+          if (task?.assigned_agent_id) {
+            db.prepare("UPDATE agents SET status='idle',current_task_id=NULL WHERE id=? AND current_task_id=?").run(task.assigned_agent_id, taskId);
+            broadcast("agent_status", db.prepare("SELECT * FROM agents WHERE id=?").get(task.assigned_agent_id));
+          }
+          appendTaskLog(taskId, "system", "Rian's decision was recorded against the pinned screenplay artifact; the story stage advanced only on an explicit approval.");
+          broadcast("task_update", db.prepare("SELECT * FROM tasks WHERE id=?").get(taskId));
+          return;
+        }
         const settled = finishVideoProductionExecutionPendingReview(db, taskId, attemptId, {
           reason: "no_phase1_production_output_validator",
         });
@@ -182,10 +270,10 @@ export function createRunCompleteHandler(deps: CreateRunCompleteHandlerDeps) {
         return;
       }
     }
-    completeTaskRun(taskId, exitCode, attemptId);
+    completeTaskRun(taskId, exitCode, attemptId, completionClaimed);
   }
 
-  function completeTaskRun(taskId: string, exitCode: number, attemptId?: string): void {
+  function completeTaskRun(taskId: string, exitCode: number, attemptId?: string, _completionClaimed = false): void {
     if (attemptId && isManagedVideoProductionTask(db, taskId) && !requireOwnedVideoProductionAttempt(db, taskId, attemptId)) {
       return;
     }

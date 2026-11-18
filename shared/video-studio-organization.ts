@@ -45,7 +45,7 @@ export const VIDEO_STUDIO_PROFILES: readonly VideoStudioAgentProfile[] = [
 export const VIDEO_STUDIO_CEO_ACTIONS: readonly VideoStudioAction[] = ["project.greenlight", "budget.override", "release.final"];
 
 export type VideoStudioStageStep =
-  | { kind: "agent"; roleKey: VideoStudioRoleKey; action: VideoStudioAction }
+  | { kind: "agent"; roleKey: VideoStudioRoleKey; action: VideoStudioAction; condition?: "take_rejected" }
   | { kind: "service"; service: "studio_technology"; action: "asset.handoff" | "archive.write" }
   | { kind: "ceo"; action: "project.greenlight" | "release.final" };
 export interface VideoStudioStageOwnership { stageKey: VideoProductionStageKey; owners: readonly VideoStudioRoleKey[]; approver: VideoStudioRoleKey | "ceo" | "service" | null; sequence: readonly VideoStudioStageStep[] }
@@ -54,10 +54,10 @@ export const VIDEO_STUDIO_STAGE_OWNERSHIP: readonly VideoStudioStageOwnership[] 
   { stageKey: "story_development", owners: ["screenwriter"], approver: "director", sequence: [{kind:"agent",roleKey:"screenwriter",action:"screenplay.write"},{kind:"agent",roleKey:"director",action:"creative.approve"}] },
   { stageKey: "visual_preproduction", owners: ["screenwriter", "art_director", "editor"], approver: "director", sequence: [{kind:"agent",roleKey:"screenwriter",action:"shot_spec.write"},{kind:"agent",roleKey:"art_director",action:"visual.manage"},{kind:"agent",roleKey:"editor",action:"edit.manage"},{kind:"agent",roleKey:"director",action:"creative.approve"}] },
   { stageKey: "audio_preproduction", owners: ["sound_producer"], approver: "director", sequence: [{kind:"agent",roleKey:"sound_producer",action:"audio.manage"},{kind:"agent",roleKey:"director",action:"creative.approve"}] },
-  { stageKey: "ai_footage_production", owners: ["video_producer"], approver: "art_director", sequence: [{kind:"agent",roleKey:"video_producer",action:"footage.submit"},{kind:"agent",roleKey:"art_director",action:"take.review"},{kind:"agent",roleKey:"director",action:"pilot.approve"}] },
+  { stageKey: "ai_footage_production", owners: ["video_producer"], approver: "art_director", sequence: [{kind:"agent",roleKey:"video_producer",action:"footage.submit"},{kind:"agent",roleKey:"art_director",action:"take.review"},{kind:"agent",roleKey:"production_manager",action:"regeneration.request",condition:"take_rejected"},{kind:"agent",roleKey:"director",action:"pilot.approve"}] },
   { stageKey: "asset_handoff_rough_cut", owners: ["editor"], approver: "service", sequence: [{kind:"service",service:"studio_technology",action:"asset.handoff"},{kind:"agent",roleKey:"editor",action:"edit.manage"}] },
-  { stageKey: "director_review", owners: ["director"], approver: "director", sequence: [{kind:"agent",roleKey:"director",action:"creative.approve"},{kind:"agent",roleKey:"director",action:"picture_lock"}] },
-  { stageKey: "finishing_qa", owners: ["sound_producer", "editor", "qa_supervisor"], approver: "qa_supervisor", sequence: [{kind:"agent",roleKey:"sound_producer",action:"audio.manage"},{kind:"agent",roleKey:"editor",action:"edit.manage"},{kind:"agent",roleKey:"qa_supervisor",action:"qa.final"}] },
+  { stageKey: "director_review", owners: ["director"], approver: "director", sequence: [{kind:"service",service:"studio_technology",action:"asset.handoff"},{kind:"agent",roleKey:"director",action:"creative.approve"},{kind:"agent",roleKey:"director",action:"picture_lock"}] },
+  { stageKey: "finishing_qa", owners: ["qa_supervisor"], approver: "qa_supervisor", sequence: [{kind:"service",service:"studio_technology",action:"asset.handoff"},{kind:"agent",roleKey:"qa_supervisor",action:"qa.final"}] },
   { stageKey: "release_archive", owners: ["production_manager"], approver: "ceo", sequence: [{kind:"agent",roleKey:"production_manager",action:"production.monitor"},{kind:"service",service:"studio_technology",action:"archive.write"},{kind:"ceo",action:"release.final"}] },
 ];
 

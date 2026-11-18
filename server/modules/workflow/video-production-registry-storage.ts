@@ -16,6 +16,7 @@ export interface StoredVideoProductionAsset {
 }
 
 const DEFAULT_MAX_BYTES = 256 * 1024 * 1024;
+const MAX_ASSET_BYTES = 1024 * 1024 * 1024;
 const PROJECT_KEY = /^[A-Za-z0-9_-]{1,128}$/;
 const CONTENT_TYPE_SIGNATURES: Record<string, (bytes: Buffer) => boolean> = {
   "image/png": (bytes) => bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
@@ -72,7 +73,7 @@ export async function storeVideoProductionAsset(
 ): Promise<StoredVideoProductionAsset> {
   validateAssetKind(input.assetType, input.contentType);
   const maxBytes = input.maxBytes ?? DEFAULT_MAX_BYTES;
-  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > DEFAULT_MAX_BYTES) fail("video_production_asset_limit_invalid");
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > MAX_ASSET_BYTES) fail("video_production_asset_limit_invalid");
   const { project } = await resolveProjectDirectory(storageRoot, input.projectId);
   const temporary = path.join(project, `.incoming-${randomUUID()}`);
   const digest = createHash("sha256");
@@ -139,5 +140,23 @@ export async function verifyVideoProductionAsset(
     return current.sha256 === input.sha256 && current.byteSize === input.byteSize && (await stat(canonical)).isFile();
   } catch {
     return false;
+  }
+}
+
+/** Returns a canonical server-owned path only after the registered bytes verify. */
+export async function getVerifiedVideoProductionAssetPath(
+  storageRoot: string,
+  input: { projectId: string; storageKey: string; sha256: string; byteSize: number },
+): Promise<string | null> {
+  if (!await verifyVideoProductionAsset(storageRoot, input)) return null;
+  try {
+    const { project } = await resolveProjectDirectory(storageRoot, input.projectId);
+    const filePath = path.join(project, input.sha256);
+    const fileStat = await lstat(filePath);
+    if (fileStat.isSymbolicLink() || !fileStat.isFile() || fileStat.size !== input.byteSize) return null;
+    const canonical = await realpath(filePath);
+    return path.dirname(canonical) === project ? canonical : null;
+  } catch {
+    return null;
   }
 }

@@ -3,8 +3,9 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { VIDEO_PRODUCTION_STAGES, type VideoProductionSnapshot } from "../../../shared/video-production";
 import { ApiRequestError } from "../../api/core";
-import { decideVideoProductionPlan, getVideoProduction, getVideoProductionOrganization, getVideoProductionRegistry, saveVideoProductionPlan, setupVideoProductionOrganization, grantVideoProductionAgent } from "../../api/video-production";
+import { createNextVideoProductionStageJob, decideVideoProductionPlan, getVideoProduction, getVideoProductionOrganization, getVideoProductionRegistry, releaseVideoProduction, saveVideoProductionPlan, setupVideoProductionOrganization, grantVideoProductionAgent } from "../../api/video-production";
 import VideoProductionPanel from "./VideoProductionPanel";
+import { runTask } from "../../api/organization-projects";
 
 vi.mock("../../api/video-production", () => ({
   getVideoProduction: vi.fn(),
@@ -12,10 +13,14 @@ vi.mock("../../api/video-production", () => ({
   decideVideoProductionPlan: vi.fn(),
   getVideoProductionOrganization: vi.fn(),
   getVideoProductionRegistry: vi.fn(),
+  createNextVideoProductionStageJob: vi.fn(),
+  releaseVideoProduction: vi.fn(),
+  videoProductionFinalMediaUrl: (projectId: string, assetId: string) => `/api/projects/${projectId}/video-production/assets/${assetId}/content`,
   setupVideoProductionOrganization: vi.fn(),
   grantVideoProductionAgent: vi.fn(),
   revokeVideoProductionAgent: vi.fn(),
 }));
+vi.mock("../../api/organization-projects", () => ({ runTask: vi.fn() }));
 
 function snapshot(state: VideoProductionSnapshot["state"] = "WAITING_FOR_APPROVAL"): VideoProductionSnapshot {
   return {
@@ -55,7 +60,7 @@ describe("VideoProductionPanel", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(getVideoProductionOrganization).mockRejectedValue(new Error("Organization not loaded"));
-    vi.mocked(getVideoProductionRegistry).mockResolvedValue({ registry: { production: {}, scenes: [], shots: [], takes: [], assets: [], visualReferences: [], dependencies: [], regenerationRequests: [], manifests: [] } });
+    vi.mocked(getVideoProductionRegistry).mockResolvedValue({ registry: { production: {}, scenes: [], shots: [], takes: [], assets: [], visualReferences: [], dependencies: [], regenerationRequests: [], manifests: [], stageArtifacts: [], stageDecisions: [], finalRelease: null } });
   });
 
   it("requires a directive to initiate intake before brief submission is available", async () => {
@@ -95,7 +100,7 @@ describe("VideoProductionPanel", () => {
     expect(await screen.findByRole("button", { name: "Approve plan v2" })).toBeEnabled();
   });
 
-  it("sends explicit approval with displayed version without starting later stages", async () => {
+  it("sends versioned approval and leaves automatic execution to the server", async () => {
     const user = userEvent.setup();
     vi.mocked(getVideoProduction).mockResolvedValue({ production: snapshot() });
     vi.mocked(decideVideoProductionPlan).mockResolvedValue({ production: snapshot("APPROVED") });
@@ -103,10 +108,23 @@ describe("VideoProductionPanel", () => {
     await user.click(await screen.findByRole("button", { name: "Approve plan v1" }));
     expect(decideVideoProductionPlan).toHaveBeenCalledWith("project-1", 1, "approve", undefined);
     expect(
-      await screen.findByText("Plan approved. Later production stages are not implemented in Phase 1."),
+      await screen.findByText("Plan approved. Production will continue automatically until CEO approval is needed or an error occurs."),
     ).toBeInTheDocument();
     expect(screen.getAllByText("not implemented")).toHaveLength(8);
     expect(screen.getByRole("button", { name: "Approve plan v1" })).toBeDisabled();
+  });
+
+  it("refreshes automatic progress to the CEO gate without launching jobs from the browser", async () => {
+    const running = { ...snapshot("APPROVED"), automation: { state: "RUNNING" as const, reason: null, task_id: "stage-1", plan_version: 1 } };
+    const waiting = { ...running, automation: { ...running.automation, state: "WAITING_CEO" as const, reason: "awaiting_ceo_final_release" } };
+    vi.mocked(getVideoProduction).mockResolvedValueOnce({ production: running }).mockResolvedValue({ production: waiting });
+    render(<VideoProductionPanel projectId="project-1" />);
+    expect(await screen.findByRole("button", { name: "Production continues automatically" })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("awaiting CEO approval"), { timeout: 4000 });
+    expect(screen.queryByRole("button", { name: /Run next approved/ })).not.toBeInTheDocument();
+    expect(createNextVideoProductionStageJob).not.toHaveBeenCalled();
+    expect(runTask).not.toHaveBeenCalled();
+    expect(releaseVideoProduction).not.toHaveBeenCalled();
   });
 
   it("refreshes after a stale decision and requires a new explicit action", async () => {
@@ -199,7 +217,7 @@ describe("VideoProductionPanel", () => {
       scenes: [{ scene_id: "scene-1", sort_order: 0, description: "Arrival", location: "Gate", characters_json: '["Ari"]' }],
       shots: [{ shot_id: "shot-1", scene_id: "scene-1", sort_order: 0, action: "Ari enters", duration_ms: 2200 }],
       takes: [{ take_id: "take-1", shot_id: "shot-1", take_number: 1, shot_version: 2, current_approved: 1, latest_decision: "approved", latest_reviewer: "yuna", latest_feedback: "Continuity matches", submitted_by: "miro", sha256: "hash-1", byte_size: 12, content_type: "video/mp4", attempt_metadata_json: '{"model":"fixture","prompt":"wide entry"}' }], assets: [], visualReferences: [], dependencies: [{ shot_id: "shot-1", stale: true }], regenerationRequests: [],
-      manifests: [{ manifest_id: "manifest-1", manifest_version: 1, current: true, digest_sha256: "abc" }],
+      manifests: [{ manifest_id: "manifest-1", manifest_version: 1, current: true, digest_sha256: "abc" }], stageArtifacts: [], stageDecisions: [], finalRelease: null,
     } });
     render(<VideoProductionPanel projectId="project-1" />);
     expect(await screen.findByRole("heading", { name: "Shot and asset registry · read only" })).toBeInTheDocument();
@@ -211,5 +229,33 @@ describe("VideoProductionPanel", () => {
     expect(screen.getByText(/Review by yuna: Continuity matches/)).toBeInTheDocument();
     expect(screen.getByText(/Model\/prompt metadata:/)).toHaveTextContent('"wide entry"');
     expect(screen.queryByRole("button", { name: /approve take|review take|upload asset|regenerate/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the exact current final cut and releases only the full pinned snapshot", async () => {
+    const user = userEvent.setup();
+    const pins = { finalAssetId: "final-asset", finalAssetSha256: "f".repeat(64), manifestId: "manifest-1", manifestDigest: "m".repeat(64),
+      timelineArtifactId: "timeline-plan", timelineSha256: "t".repeat(64), timelineSourceArtifactId: "timeline-source", timelineSourceSha256: "s".repeat(64),
+      audioCuesArtifactId: "audio-cues", audioCuesSha256: "c".repeat(64), audioAssetId: "audio", audioSha256: "a".repeat(64), planVersion: 1 };
+    const registry = { production: {}, scenes: [], shots: [], takes: [], assets: [], visualReferences: [], dependencies: [], regenerationRequests: [], manifests: [],
+      stageArtifacts: [
+        { artifact_id: "cut-1", artifact_type: "final_cut", stage_key: "asset_handoff_rough_cut", content_text: JSON.stringify(pins), content_sha256: "z".repeat(64) },
+        { artifact_id: "qa-1", artifact_type: "qa_evidence", stage_key: "finishing_qa", content_text: JSON.stringify({ ...pins, finalCutArtifactId: "cut-1", decision: "approved", feedback: "Checks passed.", issues: [] }), content_sha256: "q".repeat(64) },
+      ],
+      stageDecisions: [
+        { decision_id: "director-decision", stage_key: "director_review", target_artifact_id: "cut-1", decision: "approved" },
+        { decision_id: "qa-decision", stage_key: "finishing_qa", target_artifact_id: "qa-1", decision: "approved" },
+      ], finalRelease: null };
+    vi.mocked(getVideoProduction).mockResolvedValue({ production: snapshot("APPROVED") });
+    vi.mocked(getVideoProductionRegistry).mockResolvedValue({ registry });
+    vi.mocked(releaseVideoProduction).mockResolvedValue({ released: true, idempotent: false });
+    render(<VideoProductionPanel projectId="project-1" />);
+    expect(await screen.findByText(/Final asset final-asset/)).toBeInTheDocument();
+    expect(document.querySelector("video")?.getAttribute("src")).toBe("/api/projects/project-1/video-production/assets/final-asset/content");
+    await user.click(screen.getByRole("button", { name: "Approve pinned final release" }));
+    await waitFor(() => expect(releaseVideoProduction).toHaveBeenCalledWith("project-1", expect.objectContaining({
+      finalCutArtifactId: "cut-1", finalAssetSha256: "f".repeat(64), manifestId: "manifest-1", timelineSourceArtifactId: "timeline-source",
+      directorDecisionId: "director-decision", qaArtifactId: "qa-1", qaDecisionId: "qa-decision",
+    })));
+    expect(runTask).not.toHaveBeenCalled();
   });
 });

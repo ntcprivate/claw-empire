@@ -4,6 +4,7 @@ import {
   VIDEO_STUDIO_DEPARTMENTS,
   VIDEO_STUDIO_PROFILES,
   VIDEO_STUDIO_ROLE_BY_KEY,
+  VIDEO_STUDIO_STAGE_OWNERSHIP,
   type VideoStudioAction,
   type VideoStudioRoleKey,
 } from "../../../shared/video-studio-organization.ts";
@@ -24,7 +25,11 @@ export interface VideoProductionAgentActor {
   taskId?: string;
   planVersion?: number;
   testRuntimeGate?: { enabled: true; isolationReady: true; now?: number };
+  /** Present only on an actor created by the in-process attempt runner. */
+  internalAttemptExecution?: symbol;
 }
+
+const INTERNAL_ATTEMPT_EXECUTION = Symbol("trusted_video_production_attempt_execution");
 
 export interface VideoProductionCeoActor {
   kind: "ceo";
@@ -55,7 +60,7 @@ const DEPARTMENT_PRESENTATION = {
 } as const;
 
 const ATTEMPT_BOUND_REGISTRY_ACTIONS = new Set<VideoStudioAction>([
-  "screenplay.write", "shot_spec.write", "visual.manage", "footage.submit", "take.review", "regeneration.request", "edit.manage",
+  "screenplay.write", "shot_spec.write", "visual.manage", "footage.submit", "take.review", "regeneration.request", "edit.manage", "audio.manage",
 ]);
 
 interface ActiveAttemptRow {
@@ -66,11 +71,12 @@ interface ActiveAttemptRow {
   plan_version: number;
   role_key: VideoStudioRoleKey;
   grant_key: string;
+  execution_action: string | null;
 }
 
-function findActiveAttemptForAgent(db: Db, attemptId: string, agentId?: string): ActiveAttemptRow | null {
+function findActiveAttemptForAgent(db: Db, attemptId: string, agentId?: string, allowCompleting = false): ActiveAttemptRow | null {
   return (db.prepare(`
-    SELECT a.attempt_id,a.project_id,a.task_id,a.assigned_agent_id,a.plan_version,r.role_key,g.grant_key
+    SELECT a.attempt_id,a.project_id,a.task_id,a.assigned_agent_id,a.plan_version,a.execution_action,r.role_key,g.grant_key
     FROM video_production_attempts a
     JOIN tasks t ON t.id=a.task_id AND t.project_id=a.project_id
     JOIN video_production_stages s ON s.project_id=a.project_id AND s.task_id=a.task_id AND s.implemented=1 AND s.status='RUNNING'
@@ -81,9 +87,9 @@ function findActiveAttemptForAgent(db: Db, attemptId: string, agentId?: string):
       AND ag.id=t.assigned_agent_id AND ag.current_task_id=t.id
     JOIN video_production_agent_roles r ON r.agent_id=ag.id
     JOIN video_production_project_grants g ON g.project_id=a.project_id AND g.agent_id=ag.id AND g.revoked_at IS NULL
-    WHERE a.attempt_id=? AND a.state='RUNNING' AND t.status='in_progress'
+    WHERE a.attempt_id=? AND a.state IN ('RUNNING','COMPLETING') AND (?=1 OR a.state='RUNNING') AND t.status='in_progress'
       AND a.assigned_agent_id IS NOT NULL AND (? IS NULL OR a.assigned_agent_id=?)
-  `).get(attemptId, agentId ?? null, agentId ?? null) as ActiveAttemptRow | undefined) ?? null;
+  `).get(attemptId, allowCompleting ? 1 : 0, agentId ?? null, agentId ?? null) as ActiveAttemptRow | undefined) ?? null;
 }
 
 export function assertVideoProductionAgentAttemptCurrent(
@@ -92,6 +98,23 @@ export function assertVideoProductionAgentAttemptCurrent(
   projectId: string,
   action: VideoStudioAction,
 ): ActiveAttemptRow {
+  if (actor.internalAttemptExecution === INTERNAL_ATTEMPT_EXECUTION) {
+    if (actor.projectId !== projectId || actor.action !== action || !videoStudioRoleAllows(actor.roleKey, action)) {
+      throw new VideoProductionPolicyError("video_production_actor_scope_mismatch", 403);
+    }
+    const attempt = actor.attemptId ? findActiveAttemptForAgent(db, actor.attemptId, actor.agentId, true) : null;
+    const stage = attempt ? db.prepare("SELECT stage_key FROM video_production_stages WHERE project_id=? AND task_id=? AND status='RUNNING'").get(projectId, attempt.task_id) as { stage_key: string } | undefined : undefined;
+    const ownership = stage && VIDEO_STUDIO_STAGE_OWNERSHIP.find((entry) => entry.stageKey === stage.stage_key);
+    const hasStep = ownership?.sequence.some((step) => step.kind === "agent" && step.roleKey === actor.roleKey && step.action === action);
+    if (!attempt || attempt.project_id !== actor.projectId || attempt.role_key !== actor.roleKey || attempt.task_id !== actor.taskId || attempt.plan_version !== actor.planVersion || attempt.execution_action !== action || !hasStep) {
+      throw new VideoProductionPolicyError("video_production_attempt_stale", 409);
+    }
+    if ((action === "plan.update" || action === "task.assign" || action === "regeneration.request") &&
+        (attempt.role_key !== "production_manager" || attempt.assigned_agent_id !== (db.prepare("SELECT manager_agent_id FROM video_productions WHERE project_id=?").get(projectId) as { manager_agent_id: string } | undefined)?.manager_agent_id || attempt.grant_key !== "coordinator")) {
+      throw new VideoProductionPolicyError("video_production_coordinator_required", 403);
+    }
+    return attempt;
+  }
   const testGate = actor.testRuntimeGate;
   if (!(VIDEO_PRODUCTION_AGENT_CREDENTIALS_ENABLED && isWorkerIsolationReady()) && !testGate) {
     throw new VideoProductionPolicyError("video_production_agent_credentials_disabled", 503);
@@ -105,6 +128,9 @@ export function assertVideoProductionAgentAttemptCurrent(
   const attempt = findActiveAttemptForAgent(db, actor.attemptId, actor.agentId);
   if (!attempt || attempt.project_id !== projectId || attempt.task_id !== actor.taskId || attempt.plan_version !== actor.planVersion) {
     throw new VideoProductionPolicyError("video_production_attempt_stale", 409);
+  }
+  if (attempt.execution_action !== null && attempt.execution_action !== action) {
+    throw new VideoProductionPolicyError("video_production_attempt_action_mismatch", 403);
   }
   const credential = db.prepare(`SELECT c.expires_at,c.revoked_at,c.scopes_json,c.project_id,c.agent_id,c.attempt_id,c.task_id,c.plan_version,
       r.role_key,g.grant_key,p.manager_agent_id
@@ -133,6 +159,29 @@ export function assertVideoProductionAgentAttemptCurrent(
     throw new VideoProductionPolicyError("video_production_coordinator_required", 403);
   }
   return attempt;
+}
+
+/** In-process executor context; never exposed from an HTTP request or browser. */
+export function createTrustedVideoProductionAttemptActor(
+  db: Db,
+  attemptId: string,
+  action: VideoStudioAction,
+): VideoProductionAgentActor {
+  const attempt = findActiveAttemptForAgent(db, attemptId, undefined, true);
+  if (!attempt) throw new VideoProductionPolicyError("video_production_attempt_stale", 409);
+  if (!videoStudioRoleAllows(attempt.role_key, action)) throw new VideoProductionPolicyError("video_production_scope_not_allowed", 403);
+  return {
+    kind: "agent",
+    agentId: attempt.assigned_agent_id,
+    projectId: attempt.project_id,
+    roleKey: attempt.role_key,
+    credentialId: "internal-attempt-executor",
+    action,
+    attemptId: attempt.attempt_id,
+    taskId: attempt.task_id,
+    planVersion: attempt.plan_version,
+    internalAttemptExecution: INTERNAL_ATTEMPT_EXECUTION,
+  };
 }
 
 function inTransaction<T>(db: Db, callback: () => T): T {
@@ -181,7 +230,7 @@ export function resolveVideoProductionActor(
   if (ATTEMPT_BOUND_REGISTRY_ACTIONS.has(action)) {
     if (!row.attempt_id || !row.task_id || row.plan_version === null) return null;
     const activeAttempt = findActiveAttemptForAgent(db, row.attempt_id, row.agent_id);
-    if (!activeAttempt || activeAttempt.project_id !== row.project_id || activeAttempt.task_id !== row.task_id || activeAttempt.plan_version !== row.plan_version) return null;
+    if (!activeAttempt || activeAttempt.project_id !== row.project_id || activeAttempt.task_id !== row.task_id || activeAttempt.plan_version !== row.plan_version || (activeAttempt.execution_action !== null && activeAttempt.execution_action !== action)) return null;
   }
   if ((action === "plan.update" || action === "task.assign" || action === "regeneration.request") &&
       (row.role_key !== "production_manager" || row.agent_id !== row.manager_agent_id || row.grant_key !== "coordinator")) return null;

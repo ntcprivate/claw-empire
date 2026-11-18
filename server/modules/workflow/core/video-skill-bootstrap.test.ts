@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("../../../config/runtime.ts", () => ({ CLI_WORKER_RUNTIME_MODE: "host" }));
 
 const childProcessMocks = vi.hoisted(() => ({
   execFileSync: vi.fn(),

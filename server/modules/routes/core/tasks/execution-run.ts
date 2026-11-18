@@ -4,8 +4,8 @@ import {
   isManagedVideoProductionTask,
   VideoProductionPolicyError,
 } from "../../../workflow/video-production.ts";
-import { hasContainerWorkerExecutor, isWorkerIsolationReady, probeWorkerIsolation } from "../../../workflow/worker-isolation.ts";
-import { requestVideoProductionExecution } from "../../../workflow/video-production-execution.ts";
+import { executeVideoProductionJob } from "../../../workflow/video-production-job-executor.ts";
+import { resumeVideoProductionAutoRun } from "../../../workflow/video-production-auto-run.ts";
 import { requireVideoProductionCeo } from "../video-production.ts";
 import { notifyTaskStatus } from "../../../../gateway/client.ts";
 import type { RuntimeContext } from "../../../../types/runtime-context.ts";
@@ -93,7 +93,7 @@ export function registerTaskRunRoute(deps: TaskRunRouteDeps): void {
     buildAvailableSkillsPromptBlock,
   } = deps;
 
-  app.post("/api/tasks/:id/run", (req, res) => {
+  app.post("/api/tasks/:id/run", async (req, res) => {
     const id = String(req.params.id);
     const resumeFromAttemptId = typeof req.body?.resume_attempt_id === "string" ? req.body.resume_attempt_id.trim() : undefined;
     const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as
@@ -126,8 +126,10 @@ export function registerTaskRunRoute(deps: TaskRunRouteDeps): void {
       }
       throw error;
     }
-    if (managedProductionTask && !isWorkerIsolationReady()) {
-      return res.status(503).json({ error: "requires_worker_isolation", retryable: false });
+    if (managedProductionTask) {
+      const result = await executeVideoProductionJob(deps, id, resumeFromAttemptId);
+      if (result.status < 300) resumeVideoProductionAutoRun(db, id);
+      return res.status(result.status).json(result.body);
     }
 
     if (activeProcesses.has(id)) {
@@ -320,12 +322,6 @@ export function registerTaskRunRoute(deps: TaskRunRouteDeps): void {
     const provider = agent.cli_provider || "claude";
     if (!["claude", "codex", "gemini", "opencode", "kimi", "copilot", "antigravity", "api"].includes(provider)) {
       return res.status(400).json({ error: "unsupported_provider", provider });
-    }
-    if (managedProductionTask && provider !== "claude" && provider !== "codex" && provider !== "gemini" && provider !== "opencode" && provider !== "kimi") {
-      return res.status(503).json({ error: "production_worker_provider_not_configured", retryable: false });
-    }
-    if (managedProductionTask && !hasContainerWorkerExecutor(provider)) {
-      return res.status(503).json({ error: "production_worker_provider_not_configured", retryable: false });
     }
     ensureVideoPreprodRemotionBestPracticesSkill({
       db: db as any,
@@ -552,8 +548,6 @@ Whenever you complete a subtask, report it in this format:
 
     appendTaskLog(id, "system", `RUN start (agent=${agent.name}, provider=${provider})`);
 
-    let productionAttemptId: string | null = null;
-
     if (provider === "api") {
       const controller = new AbortController();
       const fakePid = getNextHttpAgentPid();
@@ -659,45 +653,16 @@ Whenever you complete a subtask, report it in this format:
       return res.json({ ok: true, pid: fakePid, logPath, cwd: agentCwd, worktree: !!worktreePath });
     }
 
-    let child;
-    try {
-      if (managedProductionTask) {
-        const probe = probeWorkerIsolation();
-        const manager = db.prepare(
-          "SELECT p.manager_agent_id FROM video_production_stages s JOIN video_productions p ON p.project_id=s.project_id WHERE s.task_id=?",
-        ).get(id) as { manager_agent_id: string } | undefined;
-        if (!manager) return res.status(409).json({ error: "video_production_not_registered" });
-        const launched = requestVideoProductionExecution({
-          db,
-          taskId: id,
-          requesterAgentId: manager.manager_agent_id,
-          executorAgentId: agentId,
-          imageId: probe.immutableImageId,
-          launch: (attemptId) => spawnCliAgent(id, provider, prompt, agentCwd, logPath, mainModel, mainReasoningLevel, attemptId),
-          complete: handleTaskRunComplete,
-          onUnknown: (attemptId, detail) => appendTaskLog(id, "system", `Production attempt ${attemptId} requires reconciliation: ${JSON.stringify(detail)}`),
-          resumeFromAttemptId,
-        });
-        productionAttemptId = launched.attemptId;
-        child = launched.child;
-      } else {
-        child = spawnCliAgent(id, provider, prompt, agentCwd, logPath, mainModel, mainReasoningLevel);
-      }
-    } catch (error) {
-      if (managedProductionTask) return res.status(503).json({ error: "production_worker_launch_unavailable", retryable: false });
-      throw error;
-    }
+    const child = spawnCliAgent(id, provider, prompt, agentCwd, logPath, mainModel, mainReasoningLevel);
 
     child.on("close", (code: number | null) => {
-      if (!productionAttemptId) handleTaskRunComplete(id, code ?? 1);
+      handleTaskRunComplete(id, code ?? 1);
     });
 
     const t = nowMs();
-    if (!productionAttemptId) {
-      db.prepare(
-        "UPDATE tasks SET status = 'in_progress', assigned_agent_id = ?, started_at = ?, updated_at = ? WHERE id = ?",
-      ).run(agentId, t, t, id);
-    }
+    db.prepare(
+      "UPDATE tasks SET status = 'in_progress', assigned_agent_id = ?, started_at = ?, updated_at = ? WHERE id = ?",
+    ).run(agentId, t, t, id);
     db.prepare("UPDATE agents SET status = 'working', current_task_id = ? WHERE id = ?").run(id, agentId);
 
     const updatedTask = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id);

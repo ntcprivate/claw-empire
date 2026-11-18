@@ -47,6 +47,7 @@ export function matchVideoProductionAgentRoute(req: Pick<Request, "method" | "pa
   if (method === "GET" && (endpoint === "registry" || /^manifests\/[A-Za-z0-9_-]{1,128}$/.test(endpoint))) return { projectId, action: "studio.read" };
   if (method === "PUT" && endpoint === "plan") return { projectId, action: "plan.update" };
   if (method === "POST" && endpoint === "assignments") return { projectId, action: "task.assign" };
+  if (method === "POST" && endpoint === "stage-jobs") return { projectId, action: "task.assign" };
   if (method === "PUT" && endpoint === "scenes/order") return { projectId, action: "screenplay.write" };
   if ((method === "POST" && endpoint === "scenes") || (method === "PUT" && /^scenes\/[A-Za-z0-9_-]{1,128}$/.test(endpoint)) || (method === "DELETE" && /^scenes\/[A-Za-z0-9_-]{1,128}$/.test(endpoint))) return { projectId, action: "screenplay.write" };
   if ((method === "POST" && /^scenes\/[A-Za-z0-9_-]{1,128}\/shots$/.test(endpoint)) ||

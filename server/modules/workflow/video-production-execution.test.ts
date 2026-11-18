@@ -20,6 +20,7 @@ import {
 import { cancelVideoProductionAttempt, launchVideoProductionAttempt, reconcileVideoProductionAttemptsAfterRestart, requestVideoProductionExecution, VideoProductionLaunchNotStartedError } from "./video-production-execution.ts";
 import {
   inspectWorkerContainer,
+  buildIsolatedDockerArgs,
   spawnIsolatedWorker,
   workerContainerName,
 } from "./worker-isolation.ts";
@@ -76,7 +77,139 @@ function localFakeWorker(): ReturnType<typeof spawn> {
   return child;
 }
 
+function persistedBrokerCompletion(action: "qa.final" | "regeneration.request", state = "RUNNING", decision = "approved") {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "vp-broker-recovery-"));
+  folders.push(directory);
+  const file = path.join(directory, "recovery.sqlite");
+  const db = new DatabaseSync(file);
+  db.exec(`
+    BEGIN IMMEDIATE;
+    CREATE TABLE video_production_attempts(attempt_id TEXT,task_id TEXT,project_id TEXT,state TEXT,worker_kind TEXT,worker_identity TEXT,image_id TEXT,workspace_path TEXT,plan_version INTEGER,created_at INTEGER,updated_at INTEGER,finished_at INTEGER,detail_json TEXT);
+    CREATE TABLE video_production_stage_jobs(task_id TEXT,project_id TEXT,state TEXT,stage_key TEXT,execution_action TEXT,target_artifact_id TEXT,shot_id TEXT,shot_version INTEGER,target_take_id TEXT,idempotency_key TEXT,updated_at INTEGER);
+    CREATE TABLE video_production_stages(project_id TEXT,stage_key TEXT,task_id TEXT,status TEXT);
+    CREATE TABLE video_production_slot(singleton INTEGER,task_id TEXT,attempt_id TEXT,acquired_at INTEGER);
+    INSERT INTO video_production_slot VALUES(1,'task','attempt',1);
+    CREATE TABLE tasks(id TEXT,status TEXT,completed_at INTEGER,updated_at INTEGER);
+    INSERT INTO tasks VALUES('task','in_progress',NULL,1);
+    CREATE TABLE video_production_events(project_id TEXT,event TEXT,actor_id TEXT,detail_json TEXT,created_at INTEGER);
+    CREATE TABLE video_production_stage_decisions(project_id TEXT,decision_id TEXT,task_id TEXT,attempt_id TEXT,target_artifact_id TEXT,decision TEXT);
+    CREATE TABLE video_production_stage_artifacts(project_id TEXT,artifact_id TEXT,artifact_type TEXT,task_id TEXT,attempt_id TEXT,content_sha256 TEXT,content_text TEXT);
+    CREATE TABLE video_production_regeneration_requests(project_id TEXT,request_id TEXT,task_id TEXT,attempt_id TEXT,shot_id TEXT,shot_version INTEGER,rejected_take_id TEXT,idempotency_key TEXT);
+  `);
+  db.prepare("INSERT INTO video_production_attempts VALUES('attempt','task','project',?,'phase4_provider_broker',NULL,NULL,NULL,1,1,1,NULL,'{}')").run(state);
+  const stage = action === "qa.final" ? "finishing_qa" : "ai_footage_production";
+  db.prepare("INSERT INTO video_production_stage_jobs VALUES('task','project','RUNNING',?,?,'cut','shot',1,'rejected-take','regeneration-key',1)").run(stage, action);
+  db.prepare("INSERT INTO video_production_stages VALUES('project',?,'task','RUNNING')").run(stage);
+  if (action === "qa.final") {
+    const pins = { planVersion: 1, finalAssetId: "video", finalAssetSha256: "video-hash", manifestId: "manifest", manifestDigest: "manifest-hash", timelineArtifactId: "timeline", timelineSha256: "timeline-hash", audioCuesArtifactId: "cues", audioCuesSha256: "cues-hash", audioAssetId: "voice", audioSha256: "voice-hash" };
+    db.prepare("INSERT INTO video_production_stage_artifacts VALUES('project','cut','final_cut','cut-task','cut-attempt','cut-hash',?)").run(JSON.stringify(pins));
+    db.prepare("INSERT INTO video_production_stage_artifacts VALUES('project','qa','qa_evidence','task','attempt','qa-hash',?)")
+      .run(JSON.stringify({ ...pins, finalCutArtifactId: "cut", decision }));
+    db.prepare("INSERT INTO video_production_stage_decisions VALUES('project','decision','task','attempt','qa',?)").run(decision);
+  } else {
+    db.prepare("INSERT INTO video_production_regeneration_requests VALUES('project','request','task','attempt','shot',1,'rejected-take','regeneration-key')").run();
+  }
+  db.exec("COMMIT");
+  db.close();
+  const reopened = new DatabaseSync(file);
+  dbs.push(reopened);
+  return reopened;
+}
+
+describe("persisted provider completion recovery", () => {
+  it.each(["RUNNING", "COMPLETING", "RECONCILIATION_REQUIRED"])("settles exact committed QA evidence after reopening %s and never replays it", (state) => {
+    const db = persistedBrokerCompletion("qa.final", state);
+    expect(reconcileVideoProductionAttemptsAfterRestart(db)).toEqual([{ taskId: "task", attemptId: "attempt", state: "qa_decision_reconciled" }]);
+    expect(db.prepare("SELECT state FROM video_production_attempts").get()).toEqual({ state: "COMPLETED" });
+    expect(db.prepare("SELECT status FROM video_production_stages").get()).toEqual({ status: "COMPLETED" });
+    expect(db.prepare("SELECT task_id,attempt_id FROM video_production_slot").get()).toEqual({ task_id: null, attempt_id: null });
+    expect(reconcileVideoProductionAttemptsAfterRestart(db)).toEqual([]);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM video_production_stage_decisions").get()).toEqual({ count: 1 });
+  });
+
+  it("recovers a committed QA rejection without approving the stage", () => {
+    const db = persistedBrokerCompletion("qa.final", "RUNNING", "changes_requested");
+    expect(reconcileVideoProductionAttemptsAfterRestart(db)).toEqual([{ taskId: "task", attemptId: "attempt", state: "qa_decision_reconciled" }]);
+    expect(db.prepare("SELECT status FROM video_production_stages").get()).toEqual({ status: "BLOCKED" });
+    expect(db.prepare("SELECT task_id FROM video_production_slot").get()).toEqual({ task_id: null });
+  });
+
+  it.each(["RUNNING", "COMPLETING", "RECONCILIATION_REQUIRED"])("settles exact committed regeneration after reopening %s without recreating the request", (state) => {
+    const db = persistedBrokerCompletion("regeneration.request", state);
+    expect(reconcileVideoProductionAttemptsAfterRestart(db)).toEqual([{ taskId: "task", attemptId: "attempt", state: "regeneration_request_reconciled" }]);
+    expect(db.prepare("SELECT state FROM video_production_attempts").get()).toEqual({ state: "COMPLETED" });
+    expect(db.prepare("SELECT status FROM video_production_stages").get()).toEqual({ status: "BLOCKED" });
+    expect(db.prepare("SELECT task_id FROM video_production_slot").get()).toEqual({ task_id: null });
+    expect(reconcileVideoProductionAttemptsAfterRestart(db)).toEqual([]);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM video_production_regeneration_requests").get()).toEqual({ count: 1 });
+  });
+
+  it.each(["qa.final", "regeneration.request"] as const)("retains the owned slot for mismatched committed %s evidence", (action) => {
+    const db = persistedBrokerCompletion(action);
+    if (action === "qa.final") db.prepare("UPDATE video_production_stage_jobs SET target_artifact_id='other-cut'").run();
+    else db.prepare("UPDATE video_production_regeneration_requests SET shot_version=2").run();
+    expect(reconcileVideoProductionAttemptsAfterRestart(db)).toEqual([{ taskId: "task", attemptId: "attempt", state: "reconciliation_required" }]);
+    expect(db.prepare("SELECT state FROM video_production_attempts").get()).toEqual({ state: "RECONCILIATION_REQUIRED" });
+    expect(db.prepare("SELECT task_id,attempt_id FROM video_production_slot").get()).toEqual({ task_id: "task", attempt_id: "attempt" });
+  });
+
+  it.each(["qa.final", "regeneration.request"] as const)("never trusts a different attempt's committed %s output", (action) => {
+    const db = persistedBrokerCompletion(action);
+    if (action === "qa.final") db.prepare("UPDATE video_production_stage_decisions SET attempt_id='other-attempt'").run();
+    else db.prepare("UPDATE video_production_regeneration_requests SET attempt_id='other-attempt'").run();
+    expect(reconcileVideoProductionAttemptsAfterRestart(db)).toEqual([{ taskId: "task", attemptId: "attempt", state: "failed" }]);
+    expect(db.prepare("SELECT state FROM video_production_attempts").get()).toEqual({ state: "FAILED" });
+  });
+
+  it.each(["qa.final", "regeneration.request"] as const)("does not settle %s if the exact attempt no longer owns the slot", (action) => {
+    const db = persistedBrokerCompletion(action);
+    db.prepare("UPDATE video_production_slot SET attempt_id='another-owner'").run();
+    expect(reconcileVideoProductionAttemptsAfterRestart(db)).toEqual([{ taskId: "task", attemptId: "attempt", state: "reconciliation_required" }]);
+    expect(db.prepare("SELECT state FROM video_production_attempts").get()).toEqual({ state: "RUNNING" });
+    expect(db.prepare("SELECT attempt_id FROM video_production_slot").get()).toEqual({ attempt_id: "another-owner" });
+  });
+});
+
 describe("durable production execution coordinator", () => {
+  it("uses an evidence-based Chromium PID budget only for the isolated render profile", () => {
+    const base = ["sha256:" + "a".repeat(64), workerContainerName("123e4567-e89b-42d3-a456-426614174000"), "123e4567-e89b-42d3-a456-426614174000", path.join(os.tmpdir(), "claw-worker-fixture"), []] as const;
+    const ordinary = buildIsolatedDockerArgs(...base);
+    const render = buildIsolatedDockerArgs(...base, "production_render");
+    expect(ordinary).toContain("--pids-limit=64");
+    expect(render).toContain("--pids-limit=256");
+    expect(render).toContain("--network");
+    expect(render).toContain("none");
+    expect(render).toContain("--read-only");
+    expect(render).toContain("--cap-drop=ALL");
+  });
+
+  it("validates successful output before completion and retains the slot on validation failure", async () => {
+    const db = new DatabaseSync(":memory:");
+    dbs.push(db);
+    const [taskId] = setup(db);
+    const order: string[] = [];
+    const launched = launchVideoProductionAttempt({
+      db, taskId, agentId: "video_production-seed-5", imageId: "sha256:test-image",
+      launch: () => localFakeWorker(),
+      inspect: () => ({ state: "exited", exitCode: 0, verified: true }),
+      validateOutput: () => {
+        order.push("validate");
+        expect(db.prepare("SELECT state FROM video_production_attempts WHERE task_id=?").get(taskId)).toEqual({ state: "COMPLETING" });
+        expect(requireOwnedVideoProductionAttempt(db, taskId, (db.prepare("SELECT attempt_id FROM video_production_attempts WHERE task_id=?").get(taskId) as { attempt_id: string }).attempt_id)).toBe(true);
+        throw new Error("fixture_invalid_media");
+      },
+      outputValidationRequired: true,
+      complete: () => order.push("complete"),
+    });
+    await once(launched.child, "close");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(order).toEqual(["validate"]);
+    const attempt = db.prepare("SELECT attempt_id,state FROM video_production_attempts WHERE task_id=?").get(taskId) as { attempt_id: string; state: string };
+    expect(attempt.state).toBe("RECONCILIATION_REQUIRED");
+    expect(requireOwnedVideoProductionAttempt(db, taskId, attempt.attempt_id)).toBe(true);
+    expect(db.prepare("SELECT task_id,attempt_id FROM video_production_slot").get()).toEqual({ task_id: taskId, attempt_id: attempt.attempt_id });
+  });
+
   it("commits before launch, serializes attempts, and sends successful execution to artifact review", async () => {
     const folder = fs.mkdtempSync(path.join(os.tmpdir(), "claw-prod-int-") );
     folders.push(folder);
@@ -154,9 +287,11 @@ describe("durable production execution coordinator", () => {
     const attemptId = "a0e75aa1-2681-4fe2-a22c-b4633049738f";
     const identity = workerContainerName(attemptId);
     claimVideoProductionAttempt(db, taskId, attemptId, "container_cli", "video_production-seed-5");
-    expect(setVideoProductionAttemptLaunchState(db, taskId, attemptId, "LAUNCHING", { workerIdentity: identity, imageId: "sha256:test-image" })).toBe(true);
-    const recovered = reconcileVideoProductionAttemptsAfterRestart(db, (name, token, image) => {
+    expect(setVideoProductionAttemptLaunchState(db, taskId, attemptId, "LAUNCHING", { workerIdentity: identity, imageId: "sha256:test-image", workspacePath: path.join(os.tmpdir(), attemptId) })).toBe(true);
+    const workspacePath = path.join(os.tmpdir(), attemptId);
+    const recovered = reconcileVideoProductionAttemptsAfterRestart(db, (name, token, image, expectedWorkspace) => {
       expect([name, token, image]).toEqual([identity, attemptId, "sha256:test-image"]);
+      expect(expectedWorkspace).toBe(workspacePath);
       return { state: "unknown", verified: false };
     });
     expect(recovered).toEqual([{ taskId, attemptId, state: "reconciliation_required" }]);
@@ -172,27 +307,44 @@ describe("durable production execution coordinator", () => {
     const attemptId = "ce1bb887-6da9-4f53-a83f-49e5585a1197";
     const identity = workerContainerName(attemptId);
     claimVideoProductionAttempt(db, taskId, attemptId, "container_cli", "video_production-seed-5");
-    expect(setVideoProductionAttemptLaunchState(db, taskId, attemptId, "LAUNCHING", { workerIdentity: identity, imageId: "sha256:test-image" })).toBe(true);
+    expect(setVideoProductionAttemptLaunchState(db, taskId, attemptId, "LAUNCHING", { workerIdentity: identity, imageId: "sha256:test-image", workspacePath: path.join(os.tmpdir(), attemptId) })).toBe(true);
     expect(reconcileVideoProductionAttemptsAfterRestart(db, () => ({ state: "running", verified: true })))
       .toEqual([{ taskId, attemptId, state: "reconciliation_required" }]);
     expect(db.prepare("SELECT task_id,attempt_id FROM video_production_slot").get()).toEqual({ task_id: taskId, attempt_id: attemptId });
     expect(db.prepare("SELECT state FROM video_production_attempts WHERE attempt_id=?").get(attemptId)).toEqual({ state: "RECONCILIATION_REQUIRED" });
   });
 
-  it("releases a verified successful process only to human review, without completing its stage", () => {
+  it("retains a verified successful restart until output validation can run", () => {
     const db = new DatabaseSync(":memory:");
     dbs.push(db);
     const [taskId] = setup(db);
     const attemptId = "3f04bdba-d89e-4faf-a4d0-edeb8237d8f5";
     const identity = workerContainerName(attemptId);
     claimVideoProductionAttempt(db, taskId, attemptId, "container_cli", "video_production-seed-5");
-    expect(setVideoProductionAttemptLaunchState(db, taskId, attemptId, "LAUNCHING", { workerIdentity: identity, imageId: "sha256:test-image" })).toBe(true);
+    expect(setVideoProductionAttemptLaunchState(db, taskId, attemptId, "LAUNCHING", { workerIdentity: identity, imageId: "sha256:test-image", workspacePath: path.join(os.tmpdir(), attemptId) })).toBe(true);
     const recovered = reconcileVideoProductionAttemptsAfterRestart(db, () => ({ state: "exited", exitCode: 0, verified: true }));
-    expect(recovered).toEqual([{ taskId, attemptId, state: "review_pending_artifact_validation" }]);
-    expect(db.prepare("SELECT state FROM video_production_attempts WHERE attempt_id=?").get(attemptId)).toEqual({ state: "COMPLETED" });
-    expect(db.prepare("SELECT status FROM video_production_stages WHERE task_id=?").get(taskId)).toEqual({ status: "BLOCKED" });
-    expect(db.prepare("SELECT status FROM tasks WHERE id=?").get(taskId)).toEqual({ status: "review" });
-    expect(db.prepare("SELECT task_id,attempt_id FROM video_production_slot").get()).toEqual({ task_id: null, attempt_id: null });
+    expect(recovered).toEqual([{ taskId, attemptId, state: "reconciliation_required" }]);
+    expect(db.prepare("SELECT state FROM video_production_attempts WHERE attempt_id=?").get(attemptId)).toEqual({ state: "RECONCILIATION_REQUIRED" });
+    expect(db.prepare("SELECT status FROM video_production_stages WHERE task_id=?").get(taskId)).toEqual({ status: "RUNNING" });
+    expect(db.prepare("SELECT status FROM tasks WHERE id=?").get(taskId)).toEqual({ status: "in_progress" });
+    expect(db.prepare("SELECT task_id,attempt_id FROM video_production_slot").get()).toEqual({ task_id: taskId, attempt_id: attemptId });
+  });
+
+  it("does not trust a restarted worker whose persisted workspace mount identity is absent", () => {
+    const db = new DatabaseSync(":memory:");
+    dbs.push(db);
+    const [taskId] = setup(db);
+    const attemptId = "0e1d6995-49e5-4bb5-a36c-a86177c657d7";
+    const identity = workerContainerName(attemptId);
+    claimVideoProductionAttempt(db, taskId, attemptId, "container_cli", "video_production-seed-5");
+    setVideoProductionAttemptLaunchState(db, taskId, attemptId, "LAUNCHING", { workerIdentity: identity, imageId: "sha256:test-image" });
+    let inspected = false;
+    expect(reconcileVideoProductionAttemptsAfterRestart(db, () => {
+      inspected = true;
+      return { state: "exited", exitCode: 0, verified: true };
+    })).toEqual([{ taskId, attemptId, state: "reconciliation_required" }]);
+    expect(inspected).toBe(false);
+    expect(db.prepare("SELECT task_id,attempt_id FROM video_production_slot").get()).toEqual({ task_id: taskId, attempt_id: attemptId });
   });
 
   it("releases only a verified failed worker during startup recovery", () => {
@@ -202,7 +354,7 @@ describe("durable production execution coordinator", () => {
     const attemptId = "6bba32d5-6809-47a1-a78d-a53d3b17f735";
     const identity = workerContainerName(attemptId);
     claimVideoProductionAttempt(db, taskId, attemptId, "container_cli", "video_production-seed-5");
-    expect(setVideoProductionAttemptLaunchState(db, taskId, attemptId, "LAUNCHING", { workerIdentity: identity, imageId: "sha256:test-image" })).toBe(true);
+    expect(setVideoProductionAttemptLaunchState(db, taskId, attemptId, "LAUNCHING", { workerIdentity: identity, imageId: "sha256:test-image", workspacePath: path.join(os.tmpdir(), attemptId) })).toBe(true);
     const recovered = reconcileVideoProductionAttemptsAfterRestart(db, () => ({ state: "exited", exitCode: 17, verified: true }));
     expect(recovered).toEqual([{ taskId, attemptId, state: "failed" }]);
     expect(db.prepare("SELECT state FROM video_production_attempts WHERE attempt_id=?").get(attemptId)).toEqual({ state: "FAILED" });
@@ -410,18 +562,21 @@ describe.skipIf(!dockerImageId)("isolated Docker fake worker", () => {
     const output: Buffer[] = [];
     let completionCount = 0;
     let containerName = "";
+    let workerWorkspacePath = "";
     const launched = launchVideoProductionAttempt({
       db,
       taskId,
       agentId: "video_production-seed-5",
       imageId: dockerImageId,
-      launch(attemptId, workerIdentity) {
+      launch(attemptId, workerIdentity, workspacePath) {
         containerName = workerIdentity;
+        workerWorkspacePath = workspacePath;
         expect(observer.prepare("SELECT status FROM tasks WHERE id=?").get(taskId)).toEqual({ status: "in_progress" });
         expect(observer.prepare("SELECT attempt_id FROM video_production_attempts WHERE task_id=?").get(taskId)).toEqual({ attempt_id: attemptId });
         const child = spawnIsolatedWorker({
           imageId: dockerImageId,
           attemptId,
+          workspacePath,
           executorCommand: ["node", "-e", "const fs=require('node:fs');process.stdin.resume();process.stdin.on('end',()=>process.stdout.write(String(process.getuid())+'\\n'+String(Object.keys(process.env).some(k=>/TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY/i.test(k)))+'\\n'+String(fs.existsSync('/var/run/docker.sock'))+'\\n'+String(fs.existsSync('/root/.codex'))+'\\n'))"],
           prompt: "fake local task",
         });
@@ -439,7 +594,7 @@ describe.skipIf(!dockerImageId)("isolated Docker fake worker", () => {
     expect(dockerClientExit).toBe(0);
     expect(completionCount).toBe(1);
     expect(Buffer.concat(output).toString()).toContain("65532\nfalse\nfalse\nfalse");
-    expect(inspectWorkerContainer(containerName, launched.attemptId, dockerImageId)).toEqual({ state: "exited", exitCode: 0, verified: true });
+    expect(inspectWorkerContainer(containerName, launched.attemptId, dockerImageId, workerWorkspacePath)).toEqual({ state: "exited", exitCode: 0, verified: true });
     const dockerState = JSON.parse(execFileSync("docker", ["inspect", "--format", "{{json .}}", containerName], { encoding: "utf8", timeout: 5000, windowsHide: true })) as {
       HostConfig: { NetworkMode: string; ReadonlyRootfs: boolean; Privileged: boolean; CapDrop: string[]; SecurityOpt: string[] };
       Mounts: Array<{ Type: string; Destination: string; Source: string }>;

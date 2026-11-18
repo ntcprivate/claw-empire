@@ -1,5 +1,6 @@
 import type { RuntimeContext, WorkflowOrchestrationExports } from "../../types/runtime-context.ts";
 import type { Lang } from "../../types/lang.ts";
+import { createVideoProductionAutoRunner } from "./video-production-auto-run.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -655,8 +656,21 @@ export function initializeWorkflowPartC(ctx: RuntimeContext): WorkflowOrchestrat
     hasVisibleDiffSummary,
   });
 
-  function handleTaskRunComplete(taskId: string, exitCode: number, attemptId?: string): void {
-    runCompleteHandler.handleTaskRunComplete(taskId, exitCode, attemptId);
+  const videoProductionAutoRunner = createVideoProductionAutoRunner({
+    db, activeProcesses, appendTaskLog, getNextHttpAgentPid, broadcast,
+    startProgressTimer, handleTaskRunComplete, notifyCeo,
+  });
+
+  function scheduleVideoProductionAutoRun(): void {
+    videoProductionAutoRunner.schedule();
+  }
+
+  function handleTaskRunComplete(taskId: string, exitCode: number, attemptId?: string, completionClaimed = false): void {
+    runCompleteHandler.handleTaskRunComplete(taskId, exitCode, attemptId, completionClaimed);
+    // The handler settles the exact owned attempt and cleans up the process first.
+    // The coordinator rereads persisted state; duplicate/stale notifications cannot
+    // bypass the singleton slot, failed-job stop or approved-plan admission.
+    if (attemptId) scheduleVideoProductionAutoRun();
   }
 
   const reviewFinalizeTools = createReviewFinalizeTools({
@@ -733,5 +747,6 @@ export function initializeWorkflowPartC(ctx: RuntimeContext): WorkflowOrchestrat
     scheduleNextReviewRound,
     handleTaskRunComplete,
     finishReview,
+    scheduleVideoProductionAutoRun,
   };
 }

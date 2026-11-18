@@ -22440,6 +22440,768 @@
           }
         }
       }
+    },
+    "/api/projects/{id}/video-production/next-job": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Create the next server-selected approved production job",
+        "description": "Requires CEO session or task.assign capability. Selects the next job from persisted plan, shot, review and stage state; callers cannot select executor, action, or target.",
+        "operationId": "videoProduction_post_next_job",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created or resumed the deterministic next job.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "additionalProp1": "value"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Project or action scope denied."
+          },
+          "409": {
+            "description": "Approval, dependency, active-slot, or stage conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Phase 4 worker runner is not verified."
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/stage-jobs": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Create a validated production stage job",
+        "description": "Requires CEO session or task.assign capability. The server validates the supported action, persisted source artifact, project grant, stage dependency and assigned executor. Request fields never establish actor identity.",
+        "operationId": "videoProduction_post_stage_job",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "screenplay.write",
+                      "screenplay.revise",
+                      "shot_spec.write",
+                      "visual.manage",
+                      "edit.manage",
+                      "audio.manage",
+                      "creative.approve",
+                      "footage.submit",
+                      "take.review"
+                    ]
+                  },
+                  "artifact_id": {
+                    "type": "string"
+                  },
+                  "shot_id": {
+                    "type": "string"
+                  },
+                  "shot_version": {
+                    "type": "integer"
+                  },
+                  "agent_id": {
+                    "type": "string"
+                  },
+                  "idempotency_key": {
+                    "type": "string"
+                  }
+                },
+                "required": ["action", "idempotency_key"],
+                "additionalProperties": false
+              },
+              "example": {
+                "action": "screenplay.write",
+                "idempotency_key": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Validated stage job and Task Board item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "additionalProp1": "value"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid job request."
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Project or action scope denied."
+          },
+          "409": {
+            "description": "Approval, dependency, or stage conflict."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Stage action is not implemented."
+          },
+          "503": {
+            "description": "Phase 4 worker runner is not verified."
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/release": {
+      "post": {
+        "tags": ["projects"],
+        "summary": "Approve and pin the exact final video release",
+        "description": "CEO session with CSRF and verified isolation only. The confirmation must match the current final-cut artifact, MP4 hash, approved manifest, timeline plan and source, audio cue and bytes, Rian decision, and Quinn QA evidence and decision. Creates an immutable release row; it never impersonates an agent.",
+        "operationId": "videoProduction_post_final_release",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expected": {
+                    "type": "object",
+                    "properties": {
+                      "finalCutArtifactId": {
+                        "type": "string"
+                      },
+                      "finalAssetId": {
+                        "type": "string"
+                      },
+                      "finalAssetSha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "manifestId": {
+                        "type": "string"
+                      },
+                      "manifestDigest": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "timelineArtifactId": {
+                        "type": "string"
+                      },
+                      "timelineSha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "timelineSourceArtifactId": {
+                        "type": "string"
+                      },
+                      "timelineSourceSha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "audioCuesArtifactId": {
+                        "type": "string"
+                      },
+                      "audioAssetId": {
+                        "type": "string"
+                      },
+                      "audioSha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "directorDecisionId": {
+                        "type": "string"
+                      },
+                      "qaArtifactId": {
+                        "type": "string"
+                      },
+                      "qaArtifactSha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "qaDecisionId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "finalCutArtifactId",
+                      "finalAssetId",
+                      "finalAssetSha256",
+                      "manifestId",
+                      "manifestDigest",
+                      "timelineArtifactId",
+                      "timelineSha256",
+                      "timelineSourceArtifactId",
+                      "timelineSourceSha256",
+                      "audioCuesArtifactId",
+                      "audioAssetId",
+                      "audioSha256",
+                      "directorDecisionId",
+                      "qaArtifactId",
+                      "qaArtifactSha256",
+                      "qaDecisionId"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["expected"],
+                "additionalProperties": false
+              },
+              "example": {
+                "expected": {
+                  "finalCutArtifactId": "string",
+                  "finalAssetId": "string",
+                  "finalAssetSha256": "string",
+                  "manifestId": "string",
+                  "manifestDigest": "string",
+                  "timelineArtifactId": "string",
+                  "timelineSha256": "string",
+                  "timelineSourceArtifactId": "string",
+                  "timelineSourceSha256": "string",
+                  "audioCuesArtifactId": "string",
+                  "audioAssetId": "string",
+                  "audioSha256": "string",
+                  "directorDecisionId": "string",
+                  "qaArtifactId": "string",
+                  "qaArtifactSha256": "string",
+                  "qaDecisionId": "string"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Existing identical release returned idempotently.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "additionalProp1": "value"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Immutable release pin created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "additionalProp1": "value"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Exact release confirmation is required."
+          },
+          "401": {
+            "description": "CEO session required."
+          },
+          "403": {
+            "description": "CSRF validation failed."
+          },
+          "409": {
+            "description": "Current decision, media bytes, or release snapshot changed."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Isolation or storage is unavailable."
+          }
+        }
+      }
+    },
+    "/api/projects/{id}/video-production/assets/{assetId}/content": {
+      "get": {
+        "tags": ["projects"],
+        "summary": "Stream the project-scoped validated final MP4",
+        "description": "CEO session or studio.read capability. Only registered final-cut assets referenced by this project are eligible. The server verifies bytes and serves a single byte range without returning storage paths.",
+        "operationId": "videoProduction_get_final_media",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "videoProductionAgentCapability": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "assetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "example": "bytes=0-1023"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full validated MP4 stream.",
+            "content": {
+              "video/mp4": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "Validated partial MP4 stream.",
+            "content": {
+              "video/mp4": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "forbidden",
+                  "message": "You do not have permission to access this resource."
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project media not found."
+          },
+          "409": {
+            "description": "Registered media integrity verification failed."
+          },
+          "416": {
+            "description": "Invalid or unsatisfiable byte range."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/{id}/video-production/reconcile": {
+      "post": {
+        "tags": ["tasks"],
+        "summary": "Reconcile an exact exited Phase 4 worker attempt",
+        "description": "CEO session with CSRF and verified isolation only. Revalidates persisted container identity, image, workspace mount and attempt binding before importing Miro or Liam output. Exit status alone does not complete a task.",
+        "operationId": "videoProduction_post_reconcile_attempt",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "attempt_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": ["attempt_id"],
+                "additionalProperties": false
+              },
+              "example": {
+                "attempt_id": "string_id"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verified output imported and execution settled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "example": {
+                  "additionalProp1": "value"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Attempt identifier required."
+          },
+          "401": {
+            "description": "CEO session required."
+          },
+          "403": {
+            "description": "CSRF validation failed."
+          },
+          "404": {
+            "description": "Supported Phase 4 attempt not found."
+          },
+          "409": {
+            "description": "Worker identity, exit, output or ownership could not be verified."
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "too_many_requests",
+                  "message": "Rate limit exceeded."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "error": "internal_error",
+                  "message": "Unexpected server error."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Isolation or reconciliation service is unavailable."
+          }
+        }
+      }
     }
   }
 }

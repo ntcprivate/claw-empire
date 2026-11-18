@@ -61,6 +61,7 @@ export function initializeWorkflow(
     getRecentConversationContext: runtime.getRecentConversationContext,
     getTaskContinuationContext: runtime.getTaskContinuationContext,
     handleTaskRunComplete: runtime.handleTaskRunComplete,
+    scheduleVideoProductionAutoRun: runtime.scheduleVideoProductionAutoRun,
     hasExplicitWarningFixRequest: runtime.hasExplicitWarningFixRequest,
     hasStructuredJsonLines: runtime.hasStructuredJsonLines,
     httpAgentCounter: runtime.httpAgentCounter,

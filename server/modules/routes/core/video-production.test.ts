@@ -50,6 +50,7 @@ function fixture() {
   const broadcast = vi.fn();
   const delegation = vi.fn();
   const replies = vi.fn();
+  const scheduleVideoProductionAutoRun = vi.fn();
   const messages = createMessageIdempotencyTools({
     db,
     nowMs: Date.now,
@@ -79,7 +80,7 @@ function fixture() {
       detectMentions: () => ({ deptIds: ["design"], agentIds: [] }),
     } as never,
   );
-  registerVideoProductionRoutes({ app, db, broadcast } as unknown as Pick<RuntimeContext, "app" | "db" | "broadcast">);
+  registerVideoProductionRoutes({ app, db, broadcast, scheduleVideoProductionAutoRun });
   registerProjectRoutes({
     app,
     db,
@@ -119,7 +120,7 @@ function fixture() {
       handleMentionDelegation: delegation,
     } as never,
   );
-  return { app, db, delegation, replies };
+  return { app, db, delegation, replies, scheduleVideoProductionAutoRun };
 }
 afterEach(() => {
   databases.splice(0).forEach((db) => db.close());
@@ -146,7 +147,7 @@ describe("Video production CEO directive foundation", () => {
   });
 
   it("persists an incomplete brief, accepts a versioned plan and requires authenticated CSRF-protected CEO approval", async () => {
-    const { app, db } = fixture();
+    const { app, db, scheduleVideoProductionAutoRun } = fixture();
     const intake = await request(app)
       .post("/api/directives")
       .send({ content: "[video_production] Make a video", project_path: process.cwd() })
@@ -177,6 +178,7 @@ describe("Video production CEO directive foundation", () => {
       .set("x-test-csrf", "valid")
       .send({ version: production.plan_version - 1, decision: "approve" })
       .expect(409);
+    expect(scheduleVideoProductionAutoRun).not.toHaveBeenCalled();
     const approved = await request(app)
       .post(`${url}/decision`)
       .set("x-test-session", "ceo")
@@ -184,6 +186,8 @@ describe("Video production CEO directive foundation", () => {
       .send({ version: production.plan_version, decision: "approve", actorId: "forged-agent" })
       .expect(200);
     expect(approved.body.production.state).toBe("APPROVED");
+    expect(scheduleVideoProductionAutoRun).toHaveBeenCalledOnce();
+    expect(approved.body.production.automation).toMatchObject({ state: "RUNNING", plan_version: production.plan_version });
     expect(approved.body.production.decisions[0].actor_id).toBe("ceo_session");
     expect(
       approved.body.production.stages.filter(

@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { createReadStream } from "node:fs";
 import type { RuntimeContext } from "../../../types/runtime-context.ts";
 import { getVideoProductionAuthenticatedAgent, isAuthenticated } from "../../../security/auth.ts";
 import { VIDEO_PRODUCTION_ASSET_ROOT } from "../../../config/runtime.ts";
@@ -22,7 +23,7 @@ import {
   updateVideoProductionShot,
   updateVideoProductionVisualReference,
 } from "../../workflow/video-production-registry.ts";
-import { storeVideoProductionAsset } from "../../workflow/video-production-registry-storage.ts";
+import { getVerifiedVideoProductionAssetPath, storeVideoProductionAsset } from "../../workflow/video-production-registry-storage.ts";
 import { VideoProductionPolicyError } from "../../workflow/video-production.ts";
 
 type RegistryContext = Pick<RuntimeContext, "app" | "db"> & { assetRoot?: string };
@@ -99,6 +100,44 @@ export function registerVideoProductionRegistryRoutes(ctx: RegistryContext): voi
     const actor = actorFor(req, projectId, "studio.read");
     if (!actor && !isAuthenticated(req)) return res.status(401).json({ error: "unauthorized" });
     try { res.json({ registry: await listVideoProductionRegistry(db, projectId, ctx.assetRoot ?? VIDEO_PRODUCTION_ASSET_ROOT) }); } catch (error) { respondError(res, error); }
+  });
+  app.get("/api/projects/:id/video-production/assets/:assetId/content", async (req, res) => {
+    const projectId = String(req.params.id);
+    const actor = actorFor(req, projectId, "studio.read");
+    if (!actor && !isAuthenticated(req)) return res.status(401).json({ error: "unauthorized" });
+    try {
+      const assetId = String(req.params.assetId);
+      const asset = ctx.db.prepare(`SELECT a.storage_key,a.sha256,a.byte_size,a.content_type
+        FROM video_production_assets a WHERE a.project_id=? AND a.asset_id=? AND a.shot_id IS NULL AND a.asset_type='footage'
+          AND EXISTS(SELECT 1 FROM video_production_stage_artifacts f WHERE f.project_id=a.project_id AND f.artifact_type='final_cut'
+            AND json_extract(f.content_text,'$.finalAssetId')=a.asset_id AND json_extract(f.content_text,'$.finalAssetSha256')=a.sha256)`)
+        .get(projectId, assetId) as { storage_key: string; sha256: string; byte_size: number; content_type: string } | undefined;
+      if (!asset || asset.content_type !== "video/mp4") return res.status(404).json({ error: "video_production_media_not_found" });
+      const assetRoot = ctx.assetRoot ?? VIDEO_PRODUCTION_ASSET_ROOT;
+      const filePath = await getVerifiedVideoProductionAssetPath(assetRoot, { projectId, storageKey: asset.storage_key, sha256: asset.sha256, byteSize: asset.byte_size });
+      if (!filePath) return res.status(409).json({ error: "video_production_media_integrity_failed" });
+      let start = 0;
+      let end = asset.byte_size - 1;
+      const range = req.header("range");
+      if (range) {
+        const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+        if (!match || (!match[1] && !match[2])) return res.status(416).set("Content-Range", `bytes */${asset.byte_size}`).end();
+        if (match[1]) start = Number(match[1]);
+        if (match[2]) end = Number(match[2]);
+        if (!match[1]) {
+          start = Math.max(0, asset.byte_size - end);
+          end = asset.byte_size - 1;
+        }
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start >= asset.byte_size) return res.status(416).set("Content-Range", `bytes */${asset.byte_size}`).end();
+        end = Math.min(end, asset.byte_size - 1);
+        res.status(206).set("Content-Range", `bytes ${start}-${end}/${asset.byte_size}`);
+      }
+      res.set({ "Content-Type": asset.content_type, "Content-Length": String(end - start + 1), "Accept-Ranges": "bytes", "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
+      const stream = createReadStream(filePath, { start, end });
+      stream.on("error", () => { if (!res.headersSent) res.status(409).json({ error: "video_production_media_integrity_failed" }); else res.destroy(); });
+      res.on("close", () => { if (!res.writableEnded) stream.destroy(); });
+      return stream.pipe(res);
+    } catch (error) { return respondError(res, error); }
   });
   app.get("/api/projects/:id/video-production/manifests/:manifestId", async (req, res) => {
     const projectId = String(req.params.id);

@@ -132,6 +132,12 @@ export interface VideoProductionDecision {
   created_at: number;
 }
 export interface VideoProductionSnapshot {
+  automation?: {
+    state: "RUNNING" | "WAITING_CEO" | "ERROR" | "PAUSED" | "COMPLETED";
+    reason: string | null;
+    task_id: string | null;
+    plan_version: number;
+  } | null;
   project_id: string;
   source_message_id: string;
   root_task_id: string;

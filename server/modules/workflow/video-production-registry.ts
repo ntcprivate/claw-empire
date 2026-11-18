@@ -20,6 +20,7 @@ import {
   videoStudioRoleAllows,
 } from "./video-production-rbac.ts";
 import { VideoProductionPolicyError } from "./video-production.ts";
+import { recordTrustedVideoProductionStageArtifact } from "./video-production-stage-artifacts.ts";
 import type { StoredVideoProductionAsset } from "./video-production-registry-storage.ts";
 import { verifyVideoProductionAsset } from "./video-production-registry-storage.ts";
 
@@ -167,7 +168,12 @@ export async function listVideoProductionRegistry(db: Db, projectId: string, sto
   const regenerationRequests = db.prepare("SELECT request_id,shot_id,shot_version,rejected_take_id,idempotency_key,request_fingerprint,status,requested_by_agent_id,created_at FROM video_production_regeneration_requests WHERE project_id=? ORDER BY created_at DESC").all(projectId);
   const manifests = db.prepare("SELECT manifest_id,manifest_version,plan_version,digest_sha256,created_at FROM video_production_manifests WHERE project_id=? ORDER BY manifest_version DESC").all(projectId) as Array<{ manifest_id: string; manifest_version: number; plan_version: number; digest_sha256: string; created_at: number }>;
   const manifestStates = await Promise.all(manifests.map(async (manifest) => ({ ...manifest, current: await isVideoProductionManifestCurrent(db, projectId, manifest.manifest_id, storageRoot) })));
-  return { production, scenes, shots, takes, assets, visualReferences: references, dependencies, regenerationRequests, manifests: manifestStates };
+  const stageArtifacts = db.prepare(`SELECT artifact_id,stage_key,artifact_type,shot_id,shot_version,content_sha256,content_text,metadata_json,created_by_agent_id,created_at
+    FROM video_production_stage_artifacts WHERE project_id=? ORDER BY created_at DESC,artifact_id DESC`).all(projectId);
+  const stageDecisions = db.prepare(`SELECT decision_id,stage_key,target_artifact_id,target_sha256,decision,feedback,reviewer_agent_id,created_at
+    FROM video_production_stage_decisions WHERE project_id=? ORDER BY created_at DESC,decision_id DESC`).all(projectId);
+  const finalRelease = db.prepare("SELECT * FROM video_production_final_releases WHERE project_id=? ORDER BY released_at DESC LIMIT 1").get(projectId) ?? null;
+  return { production, scenes, shots, takes, assets, visualReferences: references, dependencies, regenerationRequests, manifests: manifestStates, stageArtifacts, stageDecisions, finalRelease };
 }
 
 export function createVideoProductionScene(db: Db, actor: VideoProductionAgentActor, projectId: string, input: { sceneId: string; content: unknown; sortOrder?: number; required?: boolean }) {
@@ -296,8 +302,9 @@ export function softDeleteVideoProductionShot(db: Db, actor: VideoProductionAgen
 export async function registerVideoProductionAsset(db: Db, actor: VideoProductionAgentActor, input: {
   projectId: string; assetId: string; assetType: "visual_reference" | "footage" | "audio" | "continuity";
   stored: StoredVideoProductionAsset; metadata: unknown; idempotencyKey: string; shotId?: string; shotVersion?: number;
+  stageArtifact?: { content: string; metadata: Record<string, unknown> };
 }, storageRoot: string) {
-  const action: VideoStudioAction = input.assetType === "visual_reference" || input.assetType === "continuity" ? "visual.manage" : "footage.submit";
+  const action: VideoStudioAction = input.assetType === "visual_reference" || input.assetType === "continuity" ? "visual.manage" : input.assetType === "audio" ? "audio.manage" : "footage.submit";
   if (input.stored.projectId !== input.projectId) fail("video_production_asset_storage_invalid", 400);
   if (!await verifyVideoProductionAsset(storageRoot, input.stored)) fail("video_production_asset_bytes_not_verified", 409);
   return transaction(db, () => {
@@ -313,6 +320,7 @@ export async function registerVideoProductionAsset(db: Db, actor: VideoProductio
       .get(input.projectId, input.idempotencyKey) as { asset_id: string; sha256: string; storage_key: string; byte_size: number; asset_type: string } | undefined;
     if (existing) {
       if (existing.asset_id !== input.assetId || existing.sha256 !== input.stored.sha256 || existing.asset_type !== input.assetType) fail("video_production_asset_idempotency_conflict");
+      if (input.stageArtifact) recordTrustedVideoProductionStageArtifact(db, { attemptId: attempt.attempt_id, action: "audio.manage", artifactType: "audio_cues", stageKey: "audio_preproduction", content: input.stageArtifact.content, metadata: input.stageArtifact.metadata });
       return existing;
     }
     db.prepare(`INSERT INTO video_production_assets
@@ -321,7 +329,102 @@ export async function registerVideoProductionAsset(db: Db, actor: VideoProductio
       input.assetType, input.stored.storageKey, input.stored.sha256, input.stored.byteSize, input.stored.contentType,
       JSON.stringify(metadata), input.idempotencyKey, actor.agentId, attempt.task_id, attempt.attempt_id, attempt.plan_version, Date.now());
     audit(db, input.projectId, "registry_asset_registered", actor.agentId, { assetId: input.assetId, type: input.assetType, sha256: input.stored.sha256, attemptId: attempt.attempt_id });
+    if (input.stageArtifact) recordTrustedVideoProductionStageArtifact(db, { attemptId: attempt.attempt_id, action: "audio.manage", artifactType: "audio_cues", stageKey: "audio_preproduction", content: input.stageArtifact.content, metadata: input.stageArtifact.metadata });
     return { assetId: input.assetId, sha256: input.stored.sha256, storageKey: input.stored.storageKey, byteSize: input.stored.byteSize, metadata };
+  });
+}
+
+/** Internal final-render import path. It is not exposed as a general HTTP asset upload. */
+export async function registerVideoProductionFinalAsset(db: Db, actor: VideoProductionAgentActor, input: {
+  projectId: string; assetId: string; stored: StoredVideoProductionAsset; metadata: unknown; idempotencyKey: string;
+  sourceText: string; sourceMetadata: Record<string, unknown>;
+}, storageRoot: string) {
+  if (input.stored.projectId !== input.projectId || input.stored.storageKey !== `${input.projectId}/${input.stored.sha256}` || input.stored.contentType !== "video/mp4") fail("video_production_final_asset_storage_invalid", 400);
+  const metadata = parse(VideoProductionAssetMetadataSchema, input.metadata, "video_production_asset_metadata_invalid") as VideoProductionAssetMetadata;
+  if (!await verifyVideoProductionAsset(storageRoot, input.stored)) fail("video_production_asset_bytes_not_verified", 409);
+  return transaction(db, () => {
+    const attempt = assertActor(db, actor, input.projectId, "edit.manage");
+    const existing = db.prepare("SELECT asset_id,sha256,storage_key,byte_size,asset_type FROM video_production_assets WHERE project_id=? AND idempotency_key=?").get(input.projectId, input.idempotencyKey) as { asset_id: string; sha256: string; storage_key: string; byte_size: number; asset_type: string } | undefined;
+    if (existing) {
+      if (existing.asset_id !== input.assetId || existing.sha256 !== input.stored.sha256 || existing.asset_type !== "footage") fail("video_production_asset_idempotency_conflict");
+    } else {
+      db.prepare(`INSERT INTO video_production_assets(project_id,asset_id,shot_id,shot_version,asset_type,storage_key,sha256,byte_size,content_type,metadata_json,idempotency_key,uploaded_by,task_id,attempt_id,attempt_plan_version,created_at)
+        VALUES(?,?,NULL,NULL,'footage',?,?,?,?,?,?,?,?,?,?,?)`).run(input.projectId, input.assetId, input.stored.storageKey, input.stored.sha256, input.stored.byteSize,
+        input.stored.contentType, JSON.stringify(metadata), input.idempotencyKey, actor.agentId, attempt.task_id, attempt.attempt_id, attempt.plan_version, Date.now());
+    }
+    const source = recordTrustedVideoProductionStageArtifact(db, { attemptId: attempt.attempt_id, action: "edit.manage", artifactType: "timeline_source", stageKey: "asset_handoff_rough_cut", content: input.sourceText, metadata: input.sourceMetadata });
+    const finalCutPins = {
+      finalAssetId: input.assetId, finalAssetSha256: input.stored.sha256,
+      manifestId: input.sourceMetadata.manifestId, manifestDigest: input.sourceMetadata.manifestDigest,
+      timelineArtifactId: input.sourceMetadata.timelineArtifactId, timelineSha256: input.sourceMetadata.timelineSha256,
+      timelineSourceArtifactId: source.artifactId, timelineSourceSha256: source.sha256,
+      audioCuesArtifactId: input.sourceMetadata.audioCuesArtifactId, audioCuesSha256: input.sourceMetadata.audioCuesSha256,
+      audioAssetId: input.sourceMetadata.audioAssetId, audioSha256: input.sourceMetadata.audioSha256,
+      planVersion: attempt.plan_version, technicalValidation: input.sourceMetadata.technicalValidation,
+    };
+    const finalCut = recordTrustedVideoProductionStageArtifact(db, { attemptId: attempt.attempt_id, action: "edit.manage", artifactType: "final_cut", stageKey: "asset_handoff_rough_cut", content: JSON.stringify(finalCutPins), metadata: finalCutPins });
+    audit(db, input.projectId, "final_render_asset_registered", actor.agentId, { assetId: input.assetId, sha256: input.stored.sha256, sourceArtifactId: source.artifactId, attemptId: attempt.attempt_id });
+    return { assetId: input.assetId, sha256: input.stored.sha256, storageKey: input.stored.storageKey, byteSize: input.stored.byteSize, metadata, sourceArtifactId: source.artifactId, finalCutArtifactId: finalCut.artifactId };
+  });
+}
+
+/** Atomically imports an already byte-verified render, its take, and its source
+ * artifact after the async file checks. No transaction is held across I/O. */
+export async function importVideoProductionRender(db: Db, actor: VideoProductionAgentActor, input: {
+  projectId: string;
+  assetId: string;
+  idempotencyKey: string;
+  shotId: string;
+  shotVersion: number;
+  stored: StoredVideoProductionAsset;
+  assetMetadata: VideoProductionAssetMetadata;
+  takeMetadata: VideoProductionTakeMetadata;
+  sourceText: string;
+  sourceMetadata: Record<string, unknown>;
+}, storageRoot: string): Promise<{ assetId: string; takeId: string; sha256: string }> {
+  if (input.stored.projectId !== input.projectId || input.stored.storageKey !== `${input.projectId}/${input.stored.sha256}` || !/^[a-f0-9]{64}$/.test(input.stored.sha256)) fail("video_production_asset_storage_invalid", 400);
+  const assetMetadata = parse(VideoProductionAssetMetadataSchema, input.assetMetadata, "video_production_asset_metadata_invalid") as VideoProductionAssetMetadata;
+  const takeMetadata = parse(VideoProductionTakeMetadataSchema, input.takeMetadata, "video_production_take_metadata_invalid") as VideoProductionTakeMetadata;
+  if (!await verifyVideoProductionAsset(storageRoot, input.stored)) fail("video_production_asset_bytes_not_verified", 409);
+  return transaction(db, () => {
+    const attempt = assertActor(db, actor, input.projectId, "footage.submit");
+    const shot = currentShot(db, input.projectId, input.shotId);
+    if (shot.current_version !== input.shotVersion || !currentShotSceneVersion(db, input.projectId, input.shotId, input.shotVersion)) fail("video_production_shot_version_conflict", 409);
+    const job = db.prepare("SELECT shot_id,shot_version,execution_action,state,assigned_agent_id FROM video_production_stage_jobs WHERE task_id=? AND project_id=?").get(attempt.task_id, input.projectId) as { shot_id: string; shot_version: number; execution_action: string; state: string; assigned_agent_id: string } | undefined;
+    if (!job || job.shot_id !== input.shotId || job.shot_version !== input.shotVersion || job.execution_action !== "footage.submit" || job.state !== "RUNNING" || job.assigned_agent_id !== actor.agentId) fail("video_production_stage_job_stale", 409);
+    if (getStaleReferenceKeys(db, input.projectId, input.shotId, input.shotVersion).length) fail("video_production_shot_references_stale", 409);
+    const existingAsset = db.prepare("SELECT asset_id,sha256,asset_type FROM video_production_assets WHERE project_id=? AND idempotency_key=?").get(input.projectId, input.idempotencyKey) as { asset_id: string; sha256: string; asset_type: string } | undefined;
+    if (existingAsset && (existingAsset.asset_id !== input.assetId || existingAsset.sha256 !== input.stored.sha256 || existingAsset.asset_type !== "footage")) fail("video_production_asset_idempotency_conflict", 409);
+    if (!existingAsset) {
+      db.prepare(`INSERT INTO video_production_assets(project_id,asset_id,shot_id,shot_version,asset_type,storage_key,sha256,byte_size,content_type,metadata_json,idempotency_key,uploaded_by,task_id,attempt_id,attempt_plan_version,created_at)
+        VALUES(?,?,?,?,'footage',?,?,?,?,?,?,?,?,?,?,?)`).run(input.projectId, input.assetId, input.shotId, input.shotVersion,
+        input.stored.storageKey, input.stored.sha256, input.stored.byteSize, input.stored.contentType, JSON.stringify(assetMetadata),
+        input.idempotencyKey, actor.agentId, attempt.task_id, attempt.attempt_id, attempt.plan_version, Date.now());
+      audit(db, input.projectId, "registry_asset_registered", actor.agentId, { assetId: input.assetId, type: "footage", sha256: input.stored.sha256, attemptId: attempt.attempt_id });
+    }
+    const existingTake = db.prepare("SELECT take_id,asset_id FROM video_production_takes WHERE project_id=? AND shot_id=? AND shot_version=? AND attempt_id=?").get(input.projectId, input.shotId, input.shotVersion, attempt.attempt_id) as { take_id: string; asset_id: string } | undefined;
+    let takeId = existingTake?.take_id;
+    if (existingTake && existingTake.asset_id !== input.assetId) fail("video_production_take_idempotency_conflict", 409);
+    if (!existingTake) {
+      const takeNumber = Number((db.prepare("SELECT COALESCE(MAX(take_number)+1,1) AS value FROM video_production_takes WHERE project_id=? AND shot_id=? AND shot_version=?").get(input.projectId, input.shotId, input.shotVersion) as { value: number }).value);
+      takeId = randomUUID();
+      const fingerprint = createHash("sha256").update(JSON.stringify({ shotId: input.shotId, shotVersion: input.shotVersion, assetId: input.assetId, metadata: takeMetadata })).digest("hex");
+      db.prepare(`INSERT INTO video_production_takes(project_id,take_id,shot_id,shot_version,take_number,asset_id,attempt_metadata_json,content_fingerprint,submitted_by,task_id,attempt_id,attempt_plan_version,submitted_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(input.projectId, takeId, input.shotId, input.shotVersion, takeNumber, input.assetId,
+        JSON.stringify(takeMetadata), fingerprint, actor.agentId, attempt.task_id, attempt.attempt_id, attempt.plan_version, Date.now());
+      audit(db, input.projectId, "take_submitted", actor.agentId, { takeId, shotId: input.shotId, shotVersion: input.shotVersion, assetId: input.assetId, attemptId: attempt.attempt_id });
+    }
+    recordTrustedVideoProductionStageArtifact(db, {
+      attemptId: attempt.attempt_id,
+      action: "footage.submit",
+      artifactType: "remotion_source",
+      stageKey: "ai_footage_production",
+      content: input.sourceText,
+      shotId: input.shotId,
+      shotVersion: input.shotVersion,
+      metadata: input.sourceMetadata,
+    });
+    return { assetId: input.assetId, takeId: takeId!, sha256: input.stored.sha256 };
   });
 }
 
@@ -532,6 +635,11 @@ export async function createVideoProductionManifest(db: Db, actor: VideoProducti
     const manifestVersion = Number((db.prepare("SELECT COALESCE(MAX(manifest_version),0)+1 AS value FROM video_production_manifests WHERE project_id=?").get(projectId) as { value: number }).value);
     const entries = required.map((row) => ({ sceneId: row.scene_id, sceneVersion: row.scene_version, shotId: row.shot_id, shotVersion: row.shot_version, takeId: row.take_id, assetId: row.asset_id, sha256: row.sha256, byteSize: row.byte_size }));
     const digest = createHash("sha256").update(JSON.stringify({ projectId, planVersion: actor.planVersion, entries })).digest("hex");
+    const prior = db.prepare("SELECT manifest_id,manifest_version,digest_sha256 FROM video_production_manifests WHERE project_id=? AND attempt_id=?").get(projectId, attempt.attempt_id) as { manifest_id: string; manifest_version: number; digest_sha256: string } | undefined;
+    if (prior) {
+      if (prior.digest_sha256 !== digest) fail("video_production_manifest_attempt_conflict", 409);
+      return { manifestId: prior.manifest_id, manifestVersion: prior.manifest_version, status: "READY", digest, entries };
+    }
     db.prepare(`INSERT INTO video_production_manifests(project_id,manifest_id,manifest_version,plan_version,status,digest_sha256,created_by_agent_id,task_id,attempt_id,attempt_plan_version,created_at)
       VALUES(?,?,?,?,'READY',?,?,?,?,?,?)`).run(projectId, manifestId, manifestVersion, attempt.plan_version, digest, actor.agentId, attempt.task_id, attempt.attempt_id, attempt.plan_version, Date.now());
     entries.forEach((entry, index) => db.prepare(`INSERT INTO video_production_manifest_entries(project_id,manifest_id,entry_order,scene_id,scene_version,shot_id,shot_version,take_id,asset_id,asset_sha256,metadata_json)
@@ -540,6 +648,20 @@ export async function createVideoProductionManifest(db: Db, actor: VideoProducti
     audit(db, projectId, "registry_manifest_created", actor.agentId, { manifestId, manifestVersion, digest, entryCount: entries.length });
     return { manifestId, manifestVersion, status: "READY", digest, entries };
   });
+}
+
+/** Read-only immutable input snapshot used to stage Liam's worker request. The real manifest is committed by the active attempt after render validation. */
+export function previewVideoProductionManifest(db: Db, projectId: string) {
+  const snapshot = manifestCandidateSnapshot(db, projectId);
+  if (!manifestSnapshotComplete(snapshot) || snapshot.rows.some((row) => getStaleReferenceKeys(db, projectId, row.shot_id, row.shot_version).length)) fail("video_production_manifest_incomplete", 409);
+  for (const row of snapshot.rows) {
+    const review = db.prepare(`SELECT decision FROM video_production_take_reviews WHERE project_id=? AND take_id=? AND review_id=(
+      SELECT review_id FROM video_production_approved_takes WHERE project_id=? AND shot_id=?)`).get(projectId, row.take_id, projectId, row.shot_id) as { decision: string } | undefined;
+    if (review?.decision !== "approved") fail("video_production_manifest_approval_invalid", 409);
+  }
+  const entries = snapshot.rows.map((row) => ({ sceneId: row.scene_id, sceneVersion: row.scene_version, shotId: row.shot_id, shotVersion: row.shot_version, takeId: row.take_id, assetId: row.asset_id, sha256: row.sha256, byteSize: row.byte_size }));
+  const digest = createHash("sha256").update(JSON.stringify({ projectId, planVersion: snapshot.planVersion, entries })).digest("hex");
+  return { projectId, planVersion: snapshot.planVersion, fingerprint: snapshot.fingerprint, digest, entries };
 }
 
 export async function isVideoProductionManifestCurrent(db: Db, projectId: string, manifestId: string, storageRoot: string): Promise<boolean> {

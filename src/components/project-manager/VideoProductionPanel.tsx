@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { VideoProductionBrief, VideoProductionSnapshot } from "../../../shared/video-production";
-import { decideVideoProductionPlan, getVideoProduction, getVideoProductionOrganization, getVideoProductionRegistry, saveVideoProductionPlan, setupVideoProductionOrganization, grantVideoProductionAgent, revokeVideoProductionAgent, type VideoProductionOrganizationResponse, type VideoProductionRegistryResponse } from "../../api/video-production";
+import { createNextVideoProductionStageJob, decideVideoProductionPlan, getVideoProduction, getVideoProductionOrganization, getVideoProductionRegistry, releaseVideoProduction, saveVideoProductionPlan, setupVideoProductionOrganization, grantVideoProductionAgent, revokeVideoProductionAgent, videoProductionFinalMediaUrl, type VideoProductionOrganizationResponse, type VideoProductionRegistryResponse } from "../../api/video-production";
+import { runTask } from "../../api/organization-projects";
 import { isApiRequestError } from "../../api/core";
 import type { Agent } from "../../types";
 
@@ -53,6 +54,7 @@ export default function VideoProductionPanel({ projectId, agents = [] }: { proje
   const [loadFailed, setLoadFailed] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [organizationRefresh, setOrganizationRefresh] = useState(0);
+  const [workflowBusy, setWorkflowBusy] = useState(false);
   const generation = useRef(0);
 
   useEffect(() => {
@@ -104,6 +106,25 @@ export default function VideoProductionPanel({ projectId, agents = [] }: { proje
     return () => { active = false; };
   }, [projectId, registryRefresh]);
 
+  useEffect(() => {
+    if (production?.automation?.state !== "RUNNING") return;
+    let active = true;
+    let pending = false;
+    const timer = setInterval(() => {
+      if (pending) return;
+      pending = true;
+      void Promise.all([getVideoProduction(projectId), getVideoProductionRegistry(projectId)])
+        .then(([snapshot, assets]) => {
+          if (!active) return;
+          setProduction(snapshot.production);
+          setRegistry(assets.registry);
+        })
+        .catch(() => { if (active) setRegistryError("Unable to refresh automatic production status. Use Refresh to reconnect."); })
+        .finally(() => { pending = false; });
+    }, 2000);
+    return () => { active = false; clearInterval(timer); };
+  }, [projectId, production?.automation?.state]);
+
   async function mutate(action: "save" | "approve" | "request_changes") {
     const current = generation.current;
     setSaving(true);
@@ -122,7 +143,7 @@ export default function VideoProductionPanel({ projectId, agents = [] }: { proje
         action === "save"
           ? "Brief and plan saved. Review the current version before approving."
           : action === "approve"
-            ? "Plan approved. Later production stages are not implemented in Phase 1."
+            ? "Plan approved. Production will continue automatically until CEO approval is needed or an error occurs."
             : "Changes requested. Revise the brief and submit a new plan version.",
       );
     } catch (err) {
@@ -167,6 +188,44 @@ export default function VideoProductionPanel({ projectId, agents = [] }: { proje
   const currentStage = production?.stages.find((stage) => stage.status !== "COMPLETED");
   const dirty = production ? BRIEF_FIELDS.some(({ key }) => brief[key] !== production.brief[key]) : true;
   const canDecide = production?.state === "WAITING_FOR_APPROVAL" && !dirty && !saving && !loading && !loadFailed;
+  const currentFinalCut = registry?.stageArtifacts.find((artifact) => artifact.artifact_type === "final_cut" && artifact.stage_key === "asset_handoff_rough_cut");
+  const finalCutPins = currentFinalCut ? (() => { try { return JSON.parse(String(currentFinalCut.content_text)) as Record<string, unknown>; } catch { return {}; } })() : {};
+  const latestDirectorDecision = currentFinalCut ? registry?.stageDecisions.find((decision) => decision.target_artifact_id === currentFinalCut.artifact_id && decision.stage_key === "director_review") : undefined;
+  const qaEvidence = registry?.stageArtifacts.find((artifact) => artifact.artifact_type === "qa_evidence" && (() => { try { return JSON.parse(String(artifact.content_text)).finalCutArtifactId === currentFinalCut?.artifact_id; } catch { return false; } })());
+  const qaPins = qaEvidence ? (() => { try { return JSON.parse(String(qaEvidence.content_text)) as Record<string, unknown>; } catch { return {}; } })() : {};
+  const latestQaDecision = qaEvidence ? registry?.stageDecisions.find((decision) => decision.target_artifact_id === qaEvidence.artifact_id && decision.stage_key === "finishing_qa") : undefined;
+  const canRelease = Boolean(currentFinalCut && latestDirectorDecision?.decision === "approved" && qaEvidence && latestQaDecision?.decision === "approved" && !registry?.finalRelease);
+
+  async function runNextJob() {
+    const current = generation.current;
+    setWorkflowBusy(true); setError(null); setNotice(null);
+    try {
+      const { task } = await createNextVideoProductionStageJob(projectId);
+      await runTask(task.id);
+      if (generation.current === current) { setNotice("Production started. Eligible stage jobs will continue automatically until CEO approval is needed or an error occurs."); setRegistryRefresh((value) => value + 1); setRefresh((value) => value + 1); }
+    } catch (err) { if (generation.current === current) setError(err instanceof Error ? err.message : "Unable to start the next production job."); }
+    finally { if (generation.current === current) setWorkflowBusy(false); }
+  }
+
+  async function approveFinalRelease() {
+    if (!canRelease) return;
+    const current = generation.current;
+    setWorkflowBusy(true); setError(null);
+    try {
+      await releaseVideoProduction(projectId, {
+        finalCutArtifactId: String(currentFinalCut?.artifact_id ?? ""),
+        finalAssetId: String(finalCutPins.finalAssetId ?? ""), finalAssetSha256: String(finalCutPins.finalAssetSha256 ?? ""),
+        manifestId: String(finalCutPins.manifestId ?? ""), manifestDigest: String(finalCutPins.manifestDigest ?? ""),
+        timelineArtifactId: String(finalCutPins.timelineArtifactId ?? ""), timelineSha256: String(finalCutPins.timelineSha256 ?? ""),
+        timelineSourceArtifactId: String(finalCutPins.timelineSourceArtifactId ?? ""), timelineSourceSha256: String(finalCutPins.timelineSourceSha256 ?? ""),
+        audioCuesArtifactId: String(finalCutPins.audioCuesArtifactId ?? ""), audioAssetId: String(finalCutPins.audioAssetId ?? ""), audioSha256: String(finalCutPins.audioSha256 ?? ""),
+        directorDecisionId: String(latestDirectorDecision?.decision_id ?? ""), qaArtifactId: String(qaEvidence?.artifact_id ?? ""),
+        qaArtifactSha256: String(qaEvidence?.content_sha256 ?? ""), qaDecisionId: String(latestQaDecision?.decision_id ?? ""),
+      });
+      if (generation.current === current) { setNotice("Final release approved and pinned."); setRegistryRefresh((value) => value + 1); setRefresh((value) => value + 1); }
+    } catch (err) { if (generation.current === current) setError(err instanceof Error ? err.message : "Unable to approve final release."); }
+    finally { if (generation.current === current) setWorkflowBusy(false); }
+  }
 
   return (
     <section
@@ -279,13 +338,12 @@ export default function VideoProductionPanel({ projectId, agents = [] }: { proje
                     <p className="mt-1 text-slate-400">Owner: {stage.owner_role}</p>
                     <p className="mt-1 break-words text-slate-400">Inputs: {stage.inputs.join("; ") || "—"}</p>
                     <p className="mt-1 break-words text-slate-400">Outputs: {stage.outputs.join("; ") || "—"}</p>
-                    {stage.approval_required && <p className="mt-1 text-amber-300">CEO approval required</p>}
+                    {stage.approval_required && <p className="mt-1 text-amber-300">{stage.key === "intake_planning" || stage.key === "release_archive" ? "CEO approval required" : "Assigned agent review required"}</p>}
                   </li>
                 ))}
               </ol>
-              <p className="mt-2 text-slate-400">
-                Phase 1 prepares the brief, plan and approval. Unimplemented stages do not execute.
-              </p>
+              {production.automation && <p role="status" className="mt-3 text-slate-300">Automatic production: {production.automation.state === "RUNNING" ? "running; eligible jobs continue automatically" : production.automation.state === "WAITING_CEO" ? "awaiting CEO approval" : production.automation.state.toLowerCase()}{production.automation.reason && ` · ${production.automation.reason}`}</p>}
+              {production.state === "APPROVED" && !registry?.finalRelease && production.automation?.state !== "WAITING_CEO" && <button type="button" disabled={workflowBusy || !registry || production.automation?.state === "RUNNING"} onClick={() => void runNextJob()} className="mt-3 rounded-md bg-emerald-700 px-3 py-2 text-white disabled:opacity-50">{workflowBusy ? "Working…" : production.automation?.state === "RUNNING" ? "Production continues automatically" : "Run next approved stage job"}</button>}
               <label className="mt-4 block space-y-1">
                 <span>Decision note</span>
                 <textarea
@@ -347,14 +405,14 @@ export default function VideoProductionPanel({ projectId, agents = [] }: { proje
               </li>;
             })}
           </ul>
-          <p className="mt-3 text-slate-400">Studio Technology services: Backend, Asset Registry, Render Worker. These are metadata only; no service executor is enabled.</p>
+          <p className="mt-3 text-slate-400">Studio Technology services: Backend, Asset Registry, Render Worker. Execution remains behind verified worker readiness and supported stage gates.</p>
           <h6 className="mt-4 font-semibold text-white">Stage ownership (planning metadata)</h6>
           <ol className="mt-2 space-y-1 text-slate-300">
             {organization.stages.map((stage) => <li key={stage.stageKey}>
               {stage.stageKey.replaceAll("_", " ")}: {stage.sequence.map((step) => step.kind === "agent" ? step.roleKey.replaceAll("_", " ") : step.kind === "ceo" ? "CEO" : "Studio Technology service").join(" → ")}
             </li>)}
           </ol>
-          <p className="mt-2 text-slate-400">Ownership is policy metadata. Unsupported stages do not create tasks or execute.</p>
+          <p className="mt-2 text-slate-400">Ownership is policy metadata; a stage runs only when its fixed executor and isolation checks pass.</p>
         </div>
       )}
       <div className="mt-4 rounded-lg border border-slate-700 p-3" aria-label="Shot and asset registry">
@@ -403,7 +461,16 @@ export default function VideoProductionPanel({ projectId, agents = [] }: { proje
               {registry.regenerationRequests.map((item) => <li key={String(item.request_id)}>Shot {String(item.shot_id)} · {String(item.status)} · {String(item.request_id)}</li>)}
               {registry.manifests.map((item) => <li key={String(item.manifest_id)}>Manifest v{String(item.manifest_version)} · {item.current === true ? "current" : "stale"} · {String(item.digest_sha256)}</li>)}
             </ul>
-            <p className="mt-2 text-slate-500">This view does not review takes or trigger production. File hash checks do not represent codec or creative quality review.</p>
+            {currentFinalCut && <section className="mt-4 rounded border border-slate-700 p-3">
+              <h6 className="font-semibold text-white">Final cut and independent review</h6>
+              <p className="mt-1 text-slate-400">Final asset {String(finalCutPins.finalAssetId ?? "—")} · SHA-256 {String(finalCutPins.finalAssetSha256 ?? "—")}</p>
+              <p className="break-all text-slate-500">Manifest {String(finalCutPins.manifestDigest ?? "—")} · Timeline plan {String(finalCutPins.timelineSha256 ?? "—")} · Render source {String(finalCutPins.timelineSourceSha256 ?? "—")} · Audio {String(finalCutPins.audioSha256 ?? "—")}</p>
+              <video className="mt-2 max-h-96 w-full" controls preload="metadata" src={videoProductionFinalMediaUrl(projectId, String(finalCutPins.finalAssetId ?? ""))}>Final video preview</video>
+              <p className="text-slate-400">Rian: {String(latestDirectorDecision?.decision ?? "awaiting review")}</p>
+              {qaEvidence && <><p className="text-slate-400">Quinn: {String(latestQaDecision?.decision ?? "awaiting QA decision")} · {String(qaPins.feedback ?? "")}</p><p className="break-words text-slate-500">QA issues: {displayJson(qaPins.issues)}</p></>}
+              {registry.finalRelease ? <><p className="text-emerald-300">Released · {String(registry.finalRelease.final_asset_sha256)}</p><a className="mt-2 inline-block underline" href={videoProductionFinalMediaUrl(projectId, String(registry.finalRelease.final_asset_id))} download="final-video.mp4">Download released MP4</a></> : canRelease ? <button type="button" disabled={workflowBusy} onClick={() => void approveFinalRelease()} className="mt-2 rounded bg-emerald-700 px-3 py-2 text-white disabled:opacity-50">Approve pinned final release</button> : <p className="text-amber-300">Awaiting Rian’s current cut approval and Quinn’s current QA approval.</p>}
+            </section>}
+            <p className="mt-2 text-slate-500">Registry content is read only for the CEO. Release approval pins the exact MP4, manifest, timeline, audio, and QA evidence. Technical validation does not replace codec or creative review.</p>
           </>
         )}
       </div>

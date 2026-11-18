@@ -267,6 +267,7 @@ export interface WorkflowAgentExports {
 // ---------------------------------------------------------------------------
 
 export interface WorkflowOrchestrationExports {
+  scheduleVideoProductionAutoRun: () => void;
   // Data structures
   crossDeptNextCallbacks: Map<string, () => void>;
   subtaskDelegationCallbacks: Map<string, () => void>;

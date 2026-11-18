@@ -371,6 +371,7 @@ export function startLifecycle(ctx: RuntimeContext): void {
       for (const attempt of attempts) {
         appendTaskLog(attempt.taskId, "system", `Production restart reconciliation: ${attempt.state} (${attempt.attemptId}); no duplicate launch was attempted.`);
       }
+      ctx.scheduleVideoProductionAutoRun?.();
     } catch (err) {
       console.error("[Claw-Empire] production restart reconciliation failed:", err);
     }
@@ -482,6 +483,9 @@ export function startLifecycle(ctx: RuntimeContext): void {
   setInterval(() => recoverOrphanWorkingAgents("interval"), IN_PROGRESS_ORPHAN_SWEEP_MS);
   setTimeout(sweepPendingSubtaskDelegations, 4_000);
   setInterval(sweepPendingSubtaskDelegations, SUBTASK_DELEGATION_SWEEP_MS);
+  // Recover a lost in-memory continuation signal using durable approved intent.
+  // This never retries stopped/failed runs and keeps reconciliation ownership.
+  setInterval(() => ctx.scheduleVideoProductionAutoRun?.(), SUBTASK_DELEGATION_SWEEP_MS);
   setTimeout(autoAssignAgentProviders, 4_000);
   const telegramReceiver = startTelegramReceiver({ db });
   const discordReceiver = startDiscordReceiver({ db });

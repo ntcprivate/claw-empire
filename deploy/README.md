@@ -102,6 +102,16 @@ systemctl --user restart claw-empire
 
 ## Notes
 
+### Video production on the host
+
+Set `CLI_WORKER_RUNTIME_MODE=host` and install the repository dependencies with `pnpm install`. Host readiness checks the local worker, Remotion, a Chrome/Edge/Chromium executable and Shotcraft. Optional paths are `CLAW_REMOTION_BROWSER` and `CLAW_SHOTCRAFT_ROOT`. If the repository skill is absent, the runtime downloads the pinned, checksum-verified archive into the user cache.
+
+For a video agent, select `codex`, `claude` or `gemini` in `cli_provider` and sign into that CLI under the server's operating-system account. Host mode prefers that CLI over `api_provider_id`. Each model request uses a temporary directory, a read-only/no-tools CLI invocation and the CEO protection instruction. The child environment excludes the four server authentication/encryption secrets while retaining the user's login directories. Shotcraft tools expose the original skill as read-only and write into the attempt project.
+
+An active host worker is identified by the process created in the current server session. After a server restart, an unknown host process remains subject to reconciliation and retains its slot. Host mode runs with the account's OS permissions, so prompt restrictions and environment filtering do not provide filesystem isolation from that account's files. Browser CEO session, CSRF, RBAC and versioned approvals still apply at the API boundary.
+
+Container mode continues to use the pinned worker image and Docker confinement.
+
 - `deploy/.env.production` is a local runtime file and should stay untracked.
 - The service example writes logs to `./logs`.
 - The template is intentionally conservative. Add provider-specific keys only if you use those integrations.

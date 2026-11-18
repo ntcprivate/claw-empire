@@ -25,8 +25,13 @@ export type VideoProductionRegistryResponse = {
     dependencies: Array<Record<string, unknown>>;
     regenerationRequests: Array<Record<string, unknown>>;
     manifests: Array<Record<string, unknown>>;
+    stageArtifacts: Array<Record<string, unknown>>;
+    stageDecisions: Array<Record<string, unknown>>;
+    finalRelease: Record<string, unknown> | null;
   };
 };
+
+export type FinalReleaseConfirmation = { finalCutArtifactId: string; finalAssetId: string; finalAssetSha256: string; manifestId: string; manifestDigest: string; timelineArtifactId: string; timelineSha256: string; timelineSourceArtifactId: string; timelineSourceSha256: string; audioCuesArtifactId: string; audioAssetId: string; audioSha256: string; directorDecisionId: string; qaArtifactId: string; qaArtifactSha256: string; qaDecisionId: string };
 
 function productionPath(projectId: string): string {
   return `/api/projects/${encodeURIComponent(projectId)}/video-production`;
@@ -39,6 +44,18 @@ export function getVideoProduction(projectId: string): Promise<VideoProductionRe
 /** CEO session is read-only here; agent write credentials are never transported by the UI. */
 export function getVideoProductionRegistry(projectId: string): Promise<VideoProductionRegistryResponse> {
   return request(`${productionPath(projectId)}/registry`);
+}
+
+export function createNextVideoProductionStageJob(projectId: string): Promise<{ job: { taskId: string }; task: { id: string } }> {
+  return request(`${productionPath(projectId)}/next-job`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+}
+
+export function releaseVideoProduction(projectId: string, expected: FinalReleaseConfirmation): Promise<{ released: boolean; idempotent: boolean }> {
+  return request(`${productionPath(projectId)}/release`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected }) });
+}
+
+export function videoProductionFinalMediaUrl(projectId: string, assetId: string): string {
+  return `${productionPath(projectId)}/assets/${encodeURIComponent(assetId)}/content`;
 }
 
 export function getVideoProductionOrganization(projectId: string): Promise<VideoProductionOrganizationResponse> {

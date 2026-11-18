@@ -6,6 +6,7 @@ import { registerTaskExecutionControlRoutes } from "./execution-control.ts";
 import { registerAgentSpawnRoute } from "../agents/spawn.ts";
 import { createExecutionStartTaskTools } from "../../../workflow/orchestration/execution-start-task.ts";
 import { registerVideoProductionRoutes } from "../video-production.ts";
+import { executeVideoProductionJob } from "../../../workflow/video-production-job-executor.ts";
 
 type Handler = (req: any, res: any) => unknown;
 const openDatabases: DatabaseSync[] = [];
@@ -64,6 +65,16 @@ function response() {
 }
 
 describe("video production execution admission", () => {
+  it("enforces admission for trusted internal production execution before launch", async () => {
+    const h = harness();
+    const result = await executeVideoProductionJob(h.deps as any, "root");
+    expect(result.status).toBe(409);
+    expect(result.body.error).toBe("video_production_not_registered");
+    expect(h.launch).not.toHaveBeenCalled();
+    expect(h.db.prepare("SELECT status FROM tasks WHERE id='root'").get()).toEqual({ status: "inbox" });
+    expect(h.db.prepare("SELECT status FROM agents WHERE id='dami'").get()).toEqual({ status: "idle" });
+  });
+
   it("requires a CEO session before production /run admission or side effects", () => {
     const h = harness();
     registerTaskRunRoute(h.deps as any);
